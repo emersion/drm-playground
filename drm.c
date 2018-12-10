@@ -1,0 +1,356 @@
+#include <fcntl.h>
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+#include <drm_fourcc.h>
+#include <xf86drm.h>
+#include <xf86drmMode.h>
+
+#include "dp.h"
+#include "util.h"
+
+struct device *device_open(const char *path) {
+	printf("opening device \"%s\"\n", path);
+
+	int fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+	if (fd < 0) {
+		fatal_errno("failed to open \"%s\"", path);
+	}
+
+	if (drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1)) {
+		fatal("DRM device must support atomic modesetting");
+	}
+	if (drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1)) {
+		fatal("DRM device must support universal planes");
+	}
+
+	struct device *dev = xalloc(sizeof(*dev));
+	dev->fd = fd;
+
+	dev->gbm = gbm_create_device(fd);
+	if (!dev->gbm) {
+		fatal_errno("failed to create GBM device");
+	}
+
+	return dev;
+}
+
+void device_destroy(struct device *dev) {
+	if (!dev) {
+		return;
+	}
+
+	for (size_t i = 0; i < dev->connectors_len; ++i) {
+		struct connector *conn = &dev->connectors[i];
+		connector_finish(conn);
+	}
+
+	gbm_device_destroy(dev->gbm);
+	close(dev->fd);
+	free(dev);
+}
+
+struct prop {
+	const char *name;
+	uint32_t *dest;
+	uint32_t *value;
+};
+
+static int prop_cmp(const void *arg1, const void *arg2) {
+	const char *key = arg1;
+	const struct prop *val = arg2;
+
+	return strcmp(key, val->name);
+}
+
+void read_obj_props(struct device *dev, uint32_t obj_id, uint32_t obj_type,
+		struct prop *props, size_t props_len) {
+	drmModeObjectProperties *obj_props =
+		drmModeObjectGetProperties(dev->fd, obj_id, obj_type);
+	if (!obj_props) {
+		fatal_errno("Failed to get DRM object properties");
+	}
+
+	size_t seen = 0;
+	for (uint32_t j = 0; j < obj_props->count_props; ++j) {
+		drmModePropertyRes *prop =
+			drmModeGetProperty(dev->fd, obj_props->props[j]);
+		if (!prop) {
+			fatal_errno("Failed to get DRM property");
+		}
+
+		struct prop *p = bsearch(prop->name, props, props_len,
+			sizeof(*props), prop_cmp);
+		if (p) {
+			++seen;
+			*p->dest = prop->prop_id;
+			if (p->value) {
+				*p->value = obj_props->prop_values[j];
+			}
+		}
+
+		drmModeFreeProperty(prop);
+	}
+
+	if (seen != props_len) {
+		fatal("Could not find all required DRM properties");
+	}
+
+	drmModeFreeObjectProperties(obj_props);
+}
+
+void connector_init(struct connector *conn, struct device *dev,
+		uint32_t conn_id) {
+	printf("initializing conn-id %"PRIu32"\n", conn_id);
+
+	conn->dev = dev;
+	conn->id = conn_id;
+
+	drmModeConnector *drm_conn = drmModeGetConnector(dev->fd, conn_id);
+	if (!drm_conn) {
+		fatal_errno("failed to get conn-id %"PRIu32, conn_id);
+	}
+
+	if (drm_conn->connection != DRM_MODE_CONNECTED ||
+			drm_conn->count_modes == 0) {
+		fatal("conn-id %"PRIu32" not connected", conn_id);
+	}
+
+	if (drmModeCreatePropertyBlob(dev->fd, &drm_conn->modes[0],
+			sizeof(drm_conn->modes[0]), &conn->mode_id)) {
+		fatal_errno("failed to create DRM property blob for mode");
+	}
+
+	conn->width = drm_conn->modes[0].hdisplay;
+	conn->height = drm_conn->modes[0].vdisplay;
+
+	drmModeFreeConnector(drm_conn);
+
+	struct prop conn_props[] = {
+		{ "CRTC_ID", &conn->props.crtc_id, &conn->crtc_id },
+	};
+	read_obj_props(dev, conn_id, DRM_MODE_OBJECT_CONNECTOR, conn_props,
+		sizeof(conn_props) / sizeof(conn_props[0]));
+
+	struct prop crtc_props[] = {
+		{ "ACTIVE", &conn->crtc_props.active, NULL },
+		{ "MODE_ID", &conn->crtc_props.mode_id, NULL },
+	};
+	read_obj_props(dev, conn->crtc_id, DRM_MODE_OBJECT_CRTC, crtc_props,
+		sizeof(crtc_props) / sizeof(crtc_props[0]));
+
+	conn->old_crtc = drmModeGetCrtc(dev->fd, conn->crtc_id);
+
+	conn->atomic = drmModeAtomicAlloc();
+	if (!conn->atomic) {
+		fatal_errno("drmModeAtomicAlloc failed");
+	}
+
+	printf("using crtc-id %"PRIu32" for conn-id %"PRIu32"\n", conn->crtc_id, conn_id);
+	printf("using mode-id %"PRIu32" for conn-id %"PRIu32"\n", conn->mode_id, conn_id);
+
+	drmModeAtomicAddProperty(conn->atomic, conn->id, conn->props.crtc_id, conn->crtc_id);
+	drmModeAtomicAddProperty(conn->atomic, conn->crtc_id, conn->crtc_props.active, 1);
+	drmModeAtomicAddProperty(conn->atomic, conn->crtc_id, conn->crtc_props.mode_id, conn->mode_id);
+
+	connector_commit(conn, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK);
+}
+
+void connector_finish(struct connector *conn) {
+	struct device *dev = conn->dev;
+
+	for (size_t i = 0; i < conn->planes_len; ++i) {
+		plane_finish(&conn->planes[i]);
+	}
+
+	drmModeDestroyPropertyBlob(dev->fd, conn->mode_id);
+	drmModeAtomicFree(conn->atomic);
+
+	drmModeCrtc *c = conn->old_crtc;
+	drmModeSetCrtc(dev->fd, c->crtc_id, c->buffer_id, c->x, c->y,
+		&conn->id, 1, &c->mode);
+	drmModeFreeCrtc(conn->old_crtc);
+}
+
+void connector_commit(struct connector *conn, uint32_t flags) {
+	struct device *dev = conn->dev;
+	int cursor = drmModeAtomicGetCursor(conn->atomic);
+
+	for (size_t i = 0; i < conn->planes_len; ++i) {
+		plane_update(&conn->planes[i], conn->atomic);
+	}
+
+	if (drmModeAtomicCommit(dev->fd, conn->atomic, flags, NULL)) {
+		fatal_errno("atomic commit failed");
+	}
+
+	drmModeAtomicSetCursor(conn->atomic, cursor);
+}
+
+void plane_init(struct plane *plane, struct connector *conn,
+		uint32_t plane_id) {
+	printf("initializing plane-id %"PRIu32" on conn-id %"PRIu32"\n",
+		plane_id, conn->id);
+
+	plane->id = plane_id;
+	plane->conn = conn;
+
+	struct prop plane_props[] = {
+		{ "CRTC_H", &plane->props.crtc_h, NULL },
+		{ "CRTC_ID", &plane->props.crtc_id, NULL },
+		{ "CRTC_W", &plane->props.crtc_w, NULL },
+		{ "CRTC_X", &plane->props.crtc_x, NULL },
+		{ "CRTC_Y", &plane->props.crtc_y, NULL },
+		{ "FB_ID", &plane->props.fb_id, NULL },
+		{ "IN_FORMATS", &plane->props.in_formats, &plane->in_formats },
+		{ "SRC_H", &plane->props.src_h, NULL },
+		{ "SRC_W", &plane->props.src_w, NULL },
+		{ "SRC_X", &plane->props.src_x, NULL },
+		{ "SRC_Y", &plane->props.src_y, NULL },
+		{ "type", &plane->props.type, &plane->type },
+	};
+	read_obj_props(conn->dev, plane_id, DRM_MODE_OBJECT_PLANE, plane_props,
+		sizeof(plane_props) / sizeof(plane_props[0]));
+
+	printf("plane-id %"PRIu32" has type %"PRIu32"\n", plane_id, plane->type);
+	switch (plane->type) {
+	case DRM_PLANE_TYPE_OVERLAY:
+		plane->width = plane->height = 100;
+		break;
+	case DRM_PLANE_TYPE_PRIMARY:
+		plane->width = conn->width;
+		plane->height = conn->height;
+		break;
+	case DRM_PLANE_TYPE_CURSOR:
+		plane->width = plane->height = 20;
+		break;
+	}
+
+	uint32_t fb_fmt = DRM_FORMAT_INVALID;
+
+	drmModePropertyBlobRes *blob =
+		drmModeGetPropertyBlob(conn->dev->fd, plane->in_formats);
+	if (!blob) {
+		fatal("failed to get DRM property blob for IN_FORMATS");
+	}
+
+	struct drm_format_modifier_blob *data = blob->data;
+	uint32_t *fmts = (uint32_t *)((char *)data + data->formats_offset);
+	struct drm_format_modifier *mods =
+		(struct drm_format_modifier *)((char *)data + data->modifiers_offset);
+	for (uint32_t i = 0; i < data->count_modifiers; ++i) {
+		if (mods[i].modifier != DRM_FORMAT_MOD_LINEAR) {
+			continue;
+		}
+
+		for (uint64_t j = 0; j < 64; ++j) {
+			if (!(mods[i].formats & ((uint64_t)1 << j))) {
+				continue;
+			}
+
+			uint32_t fmt = fmts[j + mods[i].offset];
+			switch (fmt) {
+			case DRM_FORMAT_XRGB8888:
+			case DRM_FORMAT_ARGB8888:
+				fb_fmt = fmt;
+				break;
+			}
+		}
+	}
+
+	drmModeFreePropertyBlob(blob);
+
+	// TODO: dumb buffers don't seem to work with cursor planes
+	if (fb_fmt != DRM_FORMAT_INVALID && plane->type != DRM_PLANE_TYPE_CURSOR) {
+		dumb_framebuffer_init(&plane->fb, conn->dev, fb_fmt,
+			plane->width, plane->height);
+	}
+}
+
+void plane_finish(struct plane *plane) {
+	if (plane->fb.id) {
+		dumb_framebuffer_finish(&plane->fb);
+	}
+}
+
+void plane_update(struct plane *plane, drmModeAtomicReq *req) {
+	if (!plane->fb.id) {
+		return;
+	}
+	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_id, plane->conn->crtc_id);
+	drmModeAtomicAddProperty(req, plane->id, plane->props.fb_id, plane->fb.id);
+	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_x, plane->x);
+	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_y, plane->y);
+	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_w, plane->width);
+	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_h, plane->height);
+	// The src_* properties are in 16.16 fixed point
+	drmModeAtomicAddProperty(req, plane->id, plane->props.src_x, 0);
+	drmModeAtomicAddProperty(req, plane->id, plane->props.src_y, 0);
+	drmModeAtomicAddProperty(req, plane->id, plane->props.src_w, plane->fb.width << 16);
+	drmModeAtomicAddProperty(req, plane->id, plane->props.src_h, plane->fb.height << 16);
+}
+
+void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,
+		uint32_t fmt, uint32_t width, uint32_t height) {
+	int ret;
+
+	printf("initializing dumb framebuffer with format %"PRIu32" and "
+		"size %"PRIu32"x%"PRIu32"\n", fmt, width, height);
+
+	struct drm_mode_create_dumb create = {
+		.width = width,
+		.height = height,
+		.bpp = 32,
+		.flags = 0,
+	};
+	ret = drmIoctl(dev->fd, DRM_IOCTL_MODE_CREATE_DUMB, &create);
+	if (ret < 0) {
+		fatal("DRM_IOCTL_MODE_CREATE_DUMB failed");
+	}
+
+	fb->dev = dev;
+	fb->width = width;
+	fb->height = height;
+	fb->stride = create.pitch;
+	fb->handle = create.handle;
+	fb->size = create.size;
+
+	uint32_t handles[4] = { fb->handle };
+	uint32_t strides[4] = { fb->stride };
+	uint32_t offsets[4] = { 0 };
+	ret = drmModeAddFB2(dev->fd, width, height, fmt, handles, strides, offsets,
+		&fb->id, 0);
+	if (ret < 0) {
+		fatal("drmModeAddFB2 failed");
+	}
+
+	struct drm_mode_map_dumb map = { .handle = fb->handle };
+	ret = drmIoctl(dev->fd, DRM_IOCTL_MODE_MAP_DUMB, &map);
+	if (ret < 0) {
+		fatal("DRM_IOCTL_MODE_MAP_DUMB failed");
+	}
+
+	fb->data = mmap(0, fb->size, PROT_READ | PROT_WRITE, MAP_SHARED,
+		dev->fd, map.offset);
+	if (!fb->data) {
+		fatal("mmap failed");
+	}
+
+	memset(fb->data, 0xFF, fb->size);
+
+	printf("dumb framebuffer initialized with fb-id %"PRIu32"\n", fb->id);
+}
+
+void dumb_framebuffer_finish(struct dumb_framebuffer *fb) {
+	munmap(fb->data, fb->size);
+	fb->data = NULL;
+
+	drmModeRmFB(fb->dev->fd, fb->id);
+
+	struct drm_mode_destroy_dumb destroy = { .handle = fb->handle };
+	drmIoctl(fb->dev->fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+}

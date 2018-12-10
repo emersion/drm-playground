@@ -1,0 +1,6 @@
+.clang_complete
+*.o
+*.a
+bin/
+test/
+build/
