@@ -32,7 +32,6 @@ struct plane {
 
 	uint32_t id;
 	uint32_t type;
-	uint32_t in_formats;
 
 	uint32_t x;
 	uint32_t y;
@@ -48,7 +47,6 @@ struct plane {
 		uint32_t crtc_x;
 		uint32_t crtc_y;
 		uint32_t fb_id;
-		uint32_t in_formats;
 		uint32_t src_h;
 		uint32_t src_w;
 		uint32_t src_x;

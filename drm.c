@@ -206,7 +206,6 @@ void plane_init(struct plane *plane, struct connector *conn,
 		{ "CRTC_X", &plane->props.crtc_x, NULL },
 		{ "CRTC_Y", &plane->props.crtc_y, NULL },
 		{ "FB_ID", &plane->props.fb_id, NULL },
-		{ "IN_FORMATS", &plane->props.in_formats, &plane->in_formats },
 		{ "SRC_H", &plane->props.src_h, NULL },
 		{ "SRC_W", &plane->props.src_w, NULL },
 		{ "SRC_X", &plane->props.src_x, NULL },
@@ -232,37 +231,23 @@ void plane_init(struct plane *plane, struct connector *conn,
 
 	uint32_t fb_fmt = DRM_FORMAT_INVALID;
 
-	drmModePropertyBlobRes *blob =
-		drmModeGetPropertyBlob(conn->dev->fd, plane->in_formats);
-	if (!blob) {
-		fatal("failed to get DRM property blob for IN_FORMATS");
+	// We could use IN_FORMATS instead here, but it's not yet widely supported
+	drmModePlane *drm_plane = drmModeGetPlane(conn->dev->fd, plane_id);
+	if (!plane) {
+		fatal("drmModeGetPlane failed");
 	}
 
-	struct drm_format_modifier_blob *data = blob->data;
-	uint32_t *fmts = (uint32_t *)((char *)data + data->formats_offset);
-	struct drm_format_modifier *mods =
-		(struct drm_format_modifier *)((char *)data + data->modifiers_offset);
-	for (uint32_t i = 0; i < data->count_modifiers; ++i) {
-		if (mods[i].modifier != DRM_FORMAT_MOD_LINEAR) {
-			continue;
-		}
-
-		for (uint64_t j = 0; j < 64; ++j) {
-			if (!(mods[i].formats & ((uint64_t)1 << j))) {
-				continue;
-			}
-
-			uint32_t fmt = fmts[j + mods[i].offset];
-			switch (fmt) {
-			case DRM_FORMAT_XRGB8888:
-			case DRM_FORMAT_ARGB8888:
-				fb_fmt = fmt;
-				break;
-			}
+	for (uint32_t i = 0; i < drm_plane->count_formats; ++i) {
+		uint32_t fmt = drm_plane->formats[i];
+		switch (fmt) {
+		case DRM_FORMAT_XRGB8888:
+		case DRM_FORMAT_ARGB8888:
+			fb_fmt = fmt;
+			break;
 		}
 	}
 
-	drmModeFreePropertyBlob(blob);
+	drmModeFreePlane(drm_plane);
 
 	// TODO: dumb buffers don't seem to work with cursor planes
 	if (fb_fmt != DRM_FORMAT_INVALID && plane->type != DRM_PLANE_TYPE_CURSOR) {
