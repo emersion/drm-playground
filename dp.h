@@ -37,10 +37,12 @@ struct plane {
 	uint32_t y;
 	uint32_t width;
 	uint32_t height;
+	float alpha;
 
 	struct dumb_framebuffer fb;
 
 	struct {
+		uint32_t alpha;
 		uint32_t crtc_h;
 		uint32_t crtc_id;
 		uint32_t crtc_w;

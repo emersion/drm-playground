@@ -71,6 +71,7 @@ int main(int argc, char *argv[]) {
 
 		plane->x = i * 10;
 		plane->y = i * 20;
+		plane->alpha = 0.5;
 
 		for (uint32_t y = 0; y < fb->height; ++y) {
 			uint8_t *row = fb->data + fb->stride * y;

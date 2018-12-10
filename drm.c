@@ -1,5 +1,6 @@
 #include <fcntl.h>
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,6 +59,7 @@ struct prop {
 	const char *name;
 	uint32_t *dest;
 	uint32_t *value;
+	bool required;
 };
 
 static int prop_cmp(const void *arg1, const void *arg2) {
@@ -75,10 +77,11 @@ void read_obj_props(struct device *dev, uint32_t obj_id, uint32_t obj_type,
 		fatal_errno("Failed to get DRM object properties");
 	}
 
-	size_t seen = 0;
-	for (uint32_t j = 0; j < obj_props->count_props; ++j) {
+	bool seen[props_len + 1];
+	memset(seen, false, props_len);
+	for (uint32_t i = 0; i < obj_props->count_props; ++i) {
 		drmModePropertyRes *prop =
-			drmModeGetProperty(dev->fd, obj_props->props[j]);
+			drmModeGetProperty(dev->fd, obj_props->props[i]);
 		if (!prop) {
 			fatal_errno("Failed to get DRM property");
 		}
@@ -86,18 +89,20 @@ void read_obj_props(struct device *dev, uint32_t obj_id, uint32_t obj_type,
 		struct prop *p = bsearch(prop->name, props, props_len,
 			sizeof(*props), prop_cmp);
 		if (p) {
-			++seen;
+			seen[p - props] = true;
 			*p->dest = prop->prop_id;
 			if (p->value) {
-				*p->value = obj_props->prop_values[j];
+				*p->value = obj_props->prop_values[i];
 			}
 		}
 
 		drmModeFreeProperty(prop);
 	}
 
-	if (seen != props_len) {
-		fatal("Could not find all required DRM properties");
+	for (size_t i = 0; i < props_len; ++i) {
+		if (!seen[i] && props[i].required) {
+			fatal("object is missing required property %s", props[i].name);
+		}
 	}
 
 	drmModeFreeObjectProperties(obj_props);
@@ -131,14 +136,14 @@ void connector_init(struct connector *conn, struct device *dev,
 	drmModeFreeConnector(drm_conn);
 
 	struct prop conn_props[] = {
-		{ "CRTC_ID", &conn->props.crtc_id, &conn->crtc_id },
+		{ "CRTC_ID", &conn->props.crtc_id, &conn->crtc_id, true },
 	};
 	read_obj_props(dev, conn_id, DRM_MODE_OBJECT_CONNECTOR, conn_props,
 		sizeof(conn_props) / sizeof(conn_props[0]));
 
 	struct prop crtc_props[] = {
-		{ "ACTIVE", &conn->crtc_props.active, NULL },
-		{ "MODE_ID", &conn->crtc_props.mode_id, NULL },
+		{ "ACTIVE", &conn->crtc_props.active, NULL, true },
+		{ "MODE_ID", &conn->crtc_props.mode_id, NULL, true },
 	};
 	read_obj_props(dev, conn->crtc_id, DRM_MODE_OBJECT_CRTC, crtc_props,
 		sizeof(crtc_props) / sizeof(crtc_props[0]));
@@ -199,18 +204,21 @@ void plane_init(struct plane *plane, struct connector *conn,
 	plane->id = plane_id;
 	plane->conn = conn;
 
+	plane->alpha = 1.0;
+
 	struct prop plane_props[] = {
-		{ "CRTC_H", &plane->props.crtc_h, NULL },
-		{ "CRTC_ID", &plane->props.crtc_id, NULL },
-		{ "CRTC_W", &plane->props.crtc_w, NULL },
-		{ "CRTC_X", &plane->props.crtc_x, NULL },
-		{ "CRTC_Y", &plane->props.crtc_y, NULL },
-		{ "FB_ID", &plane->props.fb_id, NULL },
-		{ "SRC_H", &plane->props.src_h, NULL },
-		{ "SRC_W", &plane->props.src_w, NULL },
-		{ "SRC_X", &plane->props.src_x, NULL },
-		{ "SRC_Y", &plane->props.src_y, NULL },
-		{ "type", &plane->props.type, &plane->type },
+		{ "CRTC_H", &plane->props.crtc_h, NULL, true },
+		{ "CRTC_ID", &plane->props.crtc_id, NULL, true },
+		{ "CRTC_W", &plane->props.crtc_w, NULL, true },
+		{ "CRTC_X", &plane->props.crtc_x, NULL, true },
+		{ "CRTC_Y", &plane->props.crtc_y, NULL, true },
+		{ "FB_ID", &plane->props.fb_id, NULL, true },
+		{ "SRC_H", &plane->props.src_h, NULL, true },
+		{ "SRC_W", &plane->props.src_w, NULL, true },
+		{ "SRC_X", &plane->props.src_x, NULL, true },
+		{ "SRC_Y", &plane->props.src_y, NULL, true },
+		{ "alpha", &plane->props.alpha, NULL, false },
+		{ "type", &plane->props.type, &plane->type, true },
 	};
 	read_obj_props(conn->dev, plane_id, DRM_MODE_OBJECT_PLANE, plane_props,
 		sizeof(plane_props) / sizeof(plane_props[0]));
@@ -277,6 +285,9 @@ void plane_update(struct plane *plane, drmModeAtomicReq *req) {
 	drmModeAtomicAddProperty(req, plane->id, plane->props.src_y, 0);
 	drmModeAtomicAddProperty(req, plane->id, plane->props.src_w, plane->fb.width << 16);
 	drmModeAtomicAddProperty(req, plane->id, plane->props.src_h, plane->fb.height << 16);
+	if (plane->props.alpha) {
+		drmModeAtomicAddProperty(req, plane->id, plane->props.alpha, plane->alpha * 0xFFFF);
+	}
 }
 
 void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,
