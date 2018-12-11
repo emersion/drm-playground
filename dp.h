@@ -14,12 +14,17 @@
 struct device;
 struct connector;
 
-struct dumb_framebuffer {
+struct framebuffer {
 	struct device *dev;
 
-	uint32_t id; // DRM object ID
+	uint32_t id;
 	uint32_t width;
 	uint32_t height;
+};
+
+struct dumb_framebuffer {
+	struct framebuffer fb;
+
 	uint32_t stride;
 	uint32_t handle; // driver-specific handle
 	uint64_t size; // size of mapping
@@ -39,7 +44,7 @@ struct plane {
 	uint32_t height;
 	float alpha;
 
-	struct dumb_framebuffer fb;
+	struct framebuffer *fb;
 
 	struct {
 		uint32_t alpha;
@@ -107,7 +112,8 @@ void connector_commit(struct connector *conn, uint32_t flags);
 void plane_init(struct plane *plane, struct connector *conn,
 	uint32_t plane_id);
 void plane_finish(struct plane *plane);
-void plane_update(struct plane *plane, drmModeAtomicReq *req);
+uint32_t plane_dumb_format(struct plane *plane);
+void plane_set_framebuffer(struct plane *plane, struct framebuffer *fb);
 
 void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,
 	uint32_t fmt, uint32_t width, uint32_t height);

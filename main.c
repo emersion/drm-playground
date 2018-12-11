@@ -1,6 +1,8 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include <drm_fourcc.h>
+
 #include "dp.h"
 #include "util.h"
 
@@ -37,6 +39,9 @@ int main(int argc, char *argv[]) {
 		fatal("drmModeGetPlaneResources failed");
 	}
 
+	struct dumb_framebuffer fbs[PLANES_CAP];
+	size_t fbs_len = 0;
+
 	for (uint32_t i = 0; i < plane_res->count_planes; ++i) {
 		drmModePlane *drm_plane =
 			drmModeGetPlane(dev->fd, plane_res->planes[i]);
@@ -45,9 +50,19 @@ int main(int argc, char *argv[]) {
 		}
 
 		if (drm_plane->possible_crtcs & (1 << crtc_idx)) {
-			plane_init(&conn->planes[conn->planes_len], conn,
-				plane_res->planes[i]);
+			struct plane *plane = &conn->planes[conn->planes_len];
+			plane_init(plane, conn, plane_res->planes[i]);
 			++conn->planes_len;
+
+			uint32_t fb_fmt = plane_dumb_format(plane);
+			if (fb_fmt != DRM_FORMAT_INVALID) {
+				struct dumb_framebuffer *fb = &fbs[fbs_len];
+				dumb_framebuffer_init(fb, dev, fb_fmt,
+					plane->width, plane->height);
+				++fbs_len;
+
+				plane_set_framebuffer(plane, &fb->fb);
+			}
 		}
 
 		drmModeFreePlane(drm_plane);
@@ -67,16 +82,16 @@ int main(int argc, char *argv[]) {
 		const uint8_t *color = colors[i % colors_len];
 
 		struct plane *plane = &conn->planes[i];
-		struct dumb_framebuffer *fb = &plane->fb;
+		struct dumb_framebuffer *fb = (struct dumb_framebuffer *)plane->fb;
 
 		plane->x = i * 10;
 		plane->y = i * 20;
 		plane->alpha = 0.5;
 
-		for (uint32_t y = 0; y < fb->height; ++y) {
+		for (uint32_t y = 0; y < fb->fb.height; ++y) {
 			uint8_t *row = fb->data + fb->stride * y;
 
-			for (uint32_t x = 0; x < fb->width; ++x) {
+			for (uint32_t x = 0; x < fb->fb.width; ++x) {
 				row[x * 4 + 0] = color[0];
 				row[x * 4 + 1] = color[1];
 				row[x * 4 + 2] = color[2];
@@ -90,6 +105,10 @@ int main(int argc, char *argv[]) {
 	for (int i = 0; i < 60 * 5; ++i) {
 		struct timespec ts = { .tv_nsec = 16666667 };
 		nanosleep(&ts, NULL);
+	}
+
+	for (size_t i = 0; i < fbs_len; ++i) {
+		dumb_framebuffer_finish(&fbs[i]);
 	}
 
 	device_destroy(dev);

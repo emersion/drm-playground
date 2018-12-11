@@ -181,6 +181,8 @@ void connector_finish(struct connector *conn) {
 	drmModeFreeCrtc(conn->old_crtc);
 }
 
+static void plane_update(struct plane *plane, drmModeAtomicReq *req);
+
 void connector_commit(struct connector *conn, uint32_t flags) {
 	struct device *dev = conn->dev;
 	int cursor = drmModeAtomicGetCursor(conn->atomic);
@@ -245,11 +247,15 @@ void plane_init(struct plane *plane, struct connector *conn,
 		plane->height = height;
 		break;
 	}
+}
 
+void plane_finish(struct plane *plane) {}
+
+uint32_t plane_dumb_format(struct plane *plane) {
 	uint32_t fb_fmt = DRM_FORMAT_INVALID;
 
 	// We could use IN_FORMATS instead here, but it's not yet widely supported
-	drmModePlane *drm_plane = drmModeGetPlane(conn->dev->fd, plane_id);
+	drmModePlane *drm_plane = drmModeGetPlane(plane->conn->dev->fd, plane->id);
 	if (!plane) {
 		fatal("drmModeGetPlane failed");
 	}
@@ -266,24 +272,21 @@ void plane_init(struct plane *plane, struct connector *conn,
 
 	drmModeFreePlane(drm_plane);
 
-	if (fb_fmt != DRM_FORMAT_INVALID) {
-		dumb_framebuffer_init(&plane->fb, conn->dev, fb_fmt,
-			plane->width, plane->height);
-	}
+	return fb_fmt;
 }
 
-void plane_finish(struct plane *plane) {
-	if (plane->fb.id) {
-		dumb_framebuffer_finish(&plane->fb);
-	}
+void plane_set_framebuffer(struct plane *plane, struct framebuffer *fb) {
+	plane->fb = fb;
 }
 
-void plane_update(struct plane *plane, drmModeAtomicReq *req) {
-	if (!plane->fb.id) {
+static void plane_update(struct plane *plane, drmModeAtomicReq *req) {
+	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_id, plane->conn->crtc_id);
+
+	if (!plane->fb) {
 		return;
 	}
-	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_id, plane->conn->crtc_id);
-	drmModeAtomicAddProperty(req, plane->id, plane->props.fb_id, plane->fb.id);
+
+	drmModeAtomicAddProperty(req, plane->id, plane->props.fb_id, plane->fb->id);
 	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_x, plane->x);
 	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_y, plane->y);
 	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_w, plane->width);
@@ -291,8 +294,9 @@ void plane_update(struct plane *plane, drmModeAtomicReq *req) {
 	// The src_* properties are in 16.16 fixed point
 	drmModeAtomicAddProperty(req, plane->id, plane->props.src_x, 0);
 	drmModeAtomicAddProperty(req, plane->id, plane->props.src_y, 0);
-	drmModeAtomicAddProperty(req, plane->id, plane->props.src_w, plane->fb.width << 16);
-	drmModeAtomicAddProperty(req, plane->id, plane->props.src_h, plane->fb.height << 16);
+	drmModeAtomicAddProperty(req, plane->id, plane->props.src_w, plane->fb->width << 16);
+	drmModeAtomicAddProperty(req, plane->id, plane->props.src_h, plane->fb->height << 16);
+
 	if (plane->props.alpha) {
 		drmModeAtomicAddProperty(req, plane->id, plane->props.alpha, plane->alpha * 0xFFFF);
 	}
@@ -316,9 +320,9 @@ void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,
 		fatal("DRM_IOCTL_MODE_CREATE_DUMB failed");
 	}
 
-	fb->dev = dev;
-	fb->width = width;
-	fb->height = height;
+	fb->fb.dev = dev;
+	fb->fb.width = width;
+	fb->fb.height = height;
 	fb->stride = create.pitch;
 	fb->handle = create.handle;
 	fb->size = create.size;
@@ -327,7 +331,7 @@ void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,
 	uint32_t strides[4] = { fb->stride };
 	uint32_t offsets[4] = { 0 };
 	ret = drmModeAddFB2(dev->fd, width, height, fmt, handles, strides, offsets,
-		&fb->id, 0);
+		&fb->fb.id, 0);
 	if (ret < 0) {
 		fatal("drmModeAddFB2 failed");
 	}
@@ -346,15 +350,16 @@ void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,
 
 	memset(fb->data, 0xFF, fb->size);
 
-	printf("dumb framebuffer initialized with fb-id %"PRIu32"\n", fb->id);
+	printf("dumb framebuffer initialized with fb-id %"PRIu32"\n", fb->fb.id);
 }
 
 void dumb_framebuffer_finish(struct dumb_framebuffer *fb) {
 	munmap(fb->data, fb->size);
 	fb->data = NULL;
 
-	drmModeRmFB(fb->dev->fd, fb->id);
+	drmModeRmFB(fb->fb.dev->fd, fb->fb.id);
+	fb->fb.id = 0;
 
 	struct drm_mode_destroy_dumb destroy = { .handle = fb->handle };
-	drmIoctl(fb->dev->fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+	drmIoctl(fb->fb.dev->fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
 }
