@@ -47,6 +47,7 @@ void device_init(struct device *dev, const char *path) {
 		fatal("drmModeGetResources failed");
 	}
 
+	// CRTCs need to be initialized before connectors
 	for (int i = 0; i < res->count_crtcs; ++i) {
 		struct crtc *crtc = &dev->crtcs[dev->crtcs_len];
 		crtc_init(crtc, dev, res->crtcs[i]);
@@ -94,6 +95,20 @@ void device_finish(struct device *dev) {
 
 	gbm_device_destroy(dev->gbm);
 	close(dev->fd);
+}
+
+static struct crtc *device_find_crtc(struct device *dev, uint32_t crtc_id) {
+	if (crtc_id == 0) {
+		return NULL;
+	}
+
+	for (size_t i = 0; i < dev->crtcs_len; ++i) {
+		struct crtc *crtc = &dev->crtcs[i];
+		if (crtc->id == crtc_id) {
+			return crtc;
+		}
+	}
+	return NULL;
 }
 
 struct prop {
@@ -163,15 +178,7 @@ static void connector_init(struct connector *conn, struct device *dev,
 	read_obj_props(dev, conn_id, DRM_MODE_OBJECT_CONNECTOR, conn_props,
 		sizeof(conn_props) / sizeof(conn_props[0]));
 
-	if (crtc_id != 0) {
-		for (size_t i = 0; i < dev->crtcs_len; ++i) {
-			struct crtc *crtc = &dev->crtcs[i];
-			if (crtc->id == crtc_id) {
-				conn->crtc = crtc;
-				break;
-			}
-		}
-	}
+	conn->crtc = device_find_crtc(dev, crtc_id);
 
 	drmModeConnector *drm_conn = drmModeGetConnector(dev->fd, conn_id);
 	if (!drm_conn) {
@@ -307,9 +314,10 @@ static void plane_init(struct plane *plane, struct device *dev,
 	plane->alpha = 1.0;
 
 	// TODO: read the properties
+	uint32_t crtc_id = 0;
 	struct prop plane_props[] = {
 		{ "CRTC_H", &plane->props.crtc_h, NULL, true },
-		{ "CRTC_ID", &plane->props.crtc_id, NULL, true },
+		{ "CRTC_ID", &plane->props.crtc_id, &crtc_id, true },
 		{ "CRTC_W", &plane->props.crtc_w, NULL, true },
 		{ "CRTC_X", &plane->props.crtc_x, NULL, true },
 		{ "CRTC_Y", &plane->props.crtc_y, NULL, true },
@@ -323,6 +331,8 @@ static void plane_init(struct plane *plane, struct device *dev,
 	};
 	read_obj_props(dev, plane_id, DRM_MODE_OBJECT_PLANE, plane_props,
 		sizeof(plane_props) / sizeof(plane_props[0]));
+
+	plane->crtc = device_find_crtc(dev, crtc_id);
 
 	printf("plane-id %"PRIu32" has type %"PRIu32"\n", plane_id, plane->type);
 }
