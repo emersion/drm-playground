@@ -310,13 +310,16 @@ static void crtc_init(struct crtc *crtc, struct device *dev, uint32_t crtc_id) {
 	crtc->dev = dev;
 	crtc->id = crtc_id;
 
-	// TODO: read current mode and active state
+	// TODO: read current mode
+	uint32_t active;
 	struct prop crtc_props[] = {
-		{ "ACTIVE", &crtc->props.active, NULL, true },
+		{ "ACTIVE", &crtc->props.active, &active, true },
 		{ "MODE_ID", &crtc->props.mode_id, NULL, true },
 	};
 	read_obj_props(dev, crtc_id, DRM_MODE_OBJECT_CRTC, crtc_props,
 		sizeof(crtc_props) / sizeof(crtc_props[0]));
+
+	crtc->active = active;
 }
 
 static void crtc_finish(struct crtc *crtc) {
@@ -326,7 +329,8 @@ static void crtc_finish(struct crtc *crtc) {
 
 static void crtc_update(struct crtc *crtc, drmModeAtomicReq *req) {
 	drmModeAtomicAddProperty(req, crtc->id, crtc->props.mode_id, crtc->mode_id);
-	drmModeAtomicAddProperty(req, crtc->id, crtc->props.active, crtc->mode_id != 0);
+	drmModeAtomicAddProperty(req, crtc->id, crtc->props.active,
+		crtc->mode_id != 0 && crtc->active);
 }
 
 void crtc_set_mode(struct crtc *crtc, drmModeModeInfo *mode) {

@@ -19,8 +19,7 @@ struct connector;
 struct framebuffer {
 	struct device *dev;
 	uint32_t id;
-	uint32_t width;
-	uint32_t height;
+	uint32_t width, height;
 };
 
 struct dumb_framebuffer {
@@ -41,10 +40,8 @@ struct plane {
 
 	struct crtc *crtc; // can be NULL
 	struct framebuffer *fb; // can be NULL
-	uint32_t x;
-	uint32_t y;
-	uint32_t width;
-	uint32_t height;
+	uint32_t x, y;
+	uint32_t width, height;
 	float alpha;
 
 	struct {
@@ -68,8 +65,8 @@ struct crtc {
 	uint32_t id;
 
 	uint32_t mode_id;
-	uint32_t width;
-	uint32_t height;
+	uint32_t width, height;
+	bool active;
 
 	struct {
 		uint32_t active;
