@@ -1,7 +1,9 @@
 #ifndef DP_H
 #define DP_H
 
+#include <stdbool.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #include <drm_mode.h>
 #include <gbm.h>
@@ -33,10 +35,12 @@ struct dumb_framebuffer {
 };
 
 struct plane {
-	struct connector *conn;
+	struct device *dev;
+	struct connector *conn; // can be NULL
 
 	uint32_t id;
 	uint32_t type;
+	uint32_t possible_crtcs;
 
 	uint32_t x;
 	uint32_t y;
@@ -67,6 +71,7 @@ struct connector {
 
 	uint32_t id;
 	uint32_t crtc_id;
+	ssize_t crtc_idx;
 
 	uint32_t mode_id;
 	uint32_t width;
@@ -87,9 +92,6 @@ struct connector {
 
 	uint64_t start_ns;
 	uint64_t curr_ns;
-
-	size_t planes_len;
-	struct plane planes[PLANES_CAP];
 };
 
 struct device {
@@ -99,6 +101,9 @@ struct device {
 
 	size_t connectors_len;
 	struct connector connectors[CONNECTORS_CAP];
+
+	size_t planes_len;
+	struct plane planes[PLANES_CAP];
 };
 
 struct device *device_open(const char *path);
@@ -109,11 +114,11 @@ void connector_init(struct connector *conn, struct device *dev,
 void connector_finish(struct connector *conn);
 void connector_commit(struct connector *conn, uint32_t flags);
 
-void plane_init(struct plane *plane, struct connector *conn,
-	uint32_t plane_id);
+void plane_init(struct plane *plane, struct device *dev, uint32_t plane_id);
 void plane_finish(struct plane *plane);
 uint32_t plane_dumb_format(struct plane *plane);
 void plane_set_framebuffer(struct plane *plane, struct framebuffer *fb);
+bool plane_set_connector(struct plane *plane, struct connector *conn);
 
 void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,
 	uint32_t fmt, uint32_t width, uint32_t height);

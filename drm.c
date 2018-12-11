@@ -45,9 +45,12 @@ void device_destroy(struct device *dev) {
 		return;
 	}
 
+	for (size_t i = 0; i < dev->planes_len; ++i) {
+		plane_finish(&dev->planes[i]);
+	}
+
 	for (size_t i = 0; i < dev->connectors_len; ++i) {
-		struct connector *conn = &dev->connectors[i];
-		connector_finish(conn);
+		connector_finish(&dev->connectors[i]);
 	}
 
 	gbm_device_destroy(dev->gbm);
@@ -141,6 +144,24 @@ void connector_init(struct connector *conn, struct device *dev,
 	read_obj_props(dev, conn_id, DRM_MODE_OBJECT_CONNECTOR, conn_props,
 		sizeof(conn_props) / sizeof(conn_props[0]));
 
+	drmModeRes *res = drmModeGetResources(dev->fd);
+	if (!res) {
+		fatal("drmModeGetResources failed");
+	}
+
+	conn->crtc_idx = -1;
+	for (int i = 0; i < res->count_crtcs; ++i) {
+		if (res->crtcs[i] == conn->crtc_id) {
+			conn->crtc_idx = i;
+			break;
+		}
+	}
+	if (conn->crtc_idx == -1) {
+		fatal("failed to find CRTC in list");
+	}
+
+	drmModeFreeResources(res);
+
 	struct prop crtc_props[] = {
 		{ "ACTIVE", &conn->crtc_props.active, NULL, true },
 		{ "MODE_ID", &conn->crtc_props.mode_id, NULL, true },
@@ -168,10 +189,6 @@ void connector_init(struct connector *conn, struct device *dev,
 void connector_finish(struct connector *conn) {
 	struct device *dev = conn->dev;
 
-	for (size_t i = 0; i < conn->planes_len; ++i) {
-		plane_finish(&conn->planes[i]);
-	}
-
 	drmModeDestroyPropertyBlob(dev->fd, conn->mode_id);
 	drmModeAtomicFree(conn->atomic);
 
@@ -187,8 +204,11 @@ void connector_commit(struct connector *conn, uint32_t flags) {
 	struct device *dev = conn->dev;
 	int cursor = drmModeAtomicGetCursor(conn->atomic);
 
-	for (size_t i = 0; i < conn->planes_len; ++i) {
-		plane_update(&conn->planes[i], conn->atomic);
+	for (size_t i = 0; i < dev->planes_len; ++i) {
+		struct plane *plane = &dev->planes[i];
+		if (plane->conn == conn) {
+			plane_update(plane, conn->atomic);
+		}
 	}
 
 	if (drmModeAtomicCommit(dev->fd, conn->atomic, flags, NULL)) {
@@ -198,13 +218,18 @@ void connector_commit(struct connector *conn, uint32_t flags) {
 	drmModeAtomicSetCursor(conn->atomic, cursor);
 }
 
-void plane_init(struct plane *plane, struct connector *conn,
-		uint32_t plane_id) {
-	printf("initializing plane-id %"PRIu32" on conn-id %"PRIu32"\n",
-		plane_id, conn->id);
+void plane_init(struct plane *plane, struct device *dev, uint32_t plane_id) {
+	printf("initializing plane-id %"PRIu32"\n", plane_id);
 
+	plane->dev = dev;
 	plane->id = plane_id;
-	plane->conn = conn;
+
+	drmModePlane *drm_plane = drmModeGetPlane(dev->fd, plane_id);
+	if (!drm_plane) {
+		fatal("drmModeGetPlane failed");
+	}
+	plane->possible_crtcs = drm_plane->possible_crtcs;
+	drmModeFreePlane(drm_plane);
 
 	plane->alpha = 1.0;
 
@@ -222,31 +247,10 @@ void plane_init(struct plane *plane, struct connector *conn,
 		{ "alpha", &plane->props.alpha, NULL, false },
 		{ "type", &plane->props.type, &plane->type, true },
 	};
-	read_obj_props(conn->dev, plane_id, DRM_MODE_OBJECT_PLANE, plane_props,
+	read_obj_props(dev, plane_id, DRM_MODE_OBJECT_PLANE, plane_props,
 		sizeof(plane_props) / sizeof(plane_props[0]));
 
 	printf("plane-id %"PRIu32" has type %"PRIu32"\n", plane_id, plane->type);
-	switch (plane->type) {
-	case DRM_PLANE_TYPE_OVERLAY:
-		plane->width = plane->height = 100;
-		break;
-	case DRM_PLANE_TYPE_PRIMARY:
-		plane->width = conn->width;
-		plane->height = conn->height;
-		break;
-	case DRM_PLANE_TYPE_CURSOR:;
-		// Some drivers *require* the FB to have exactly this size
-		uint64_t width, height;
-		if (drmGetCap(conn->dev->fd, DRM_CAP_CURSOR_WIDTH, &width) != 0) {
-			fatal("drmGetCap(DRM_CAP_CURSOR_WIDTH) failed");
-		}
-		if (drmGetCap(conn->dev->fd, DRM_CAP_CURSOR_HEIGHT, &height) != 0) {
-			fatal("drmGetCap(DRM_CAP_CURSOR_HEIGHT) failed");
-		}
-		plane->width = width;
-		plane->height = height;
-		break;
-	}
 }
 
 void plane_finish(struct plane *plane) {}
@@ -277,6 +281,43 @@ uint32_t plane_dumb_format(struct plane *plane) {
 
 void plane_set_framebuffer(struct plane *plane, struct framebuffer *fb) {
 	plane->fb = fb;
+}
+
+bool plane_set_connector(struct plane *plane, struct connector *conn) {
+	if (conn && (plane->possible_crtcs & (1 << conn->crtc_idx)) == 0) {
+		return false;
+	}
+
+	plane->conn = conn;
+
+	if (conn == NULL) {
+		plane->width = plane->height = 0;
+		return true;
+	}
+
+	switch (plane->type) {
+	case DRM_PLANE_TYPE_OVERLAY:
+		plane->width = plane->height = 100;
+		break;
+	case DRM_PLANE_TYPE_PRIMARY:
+		plane->width = conn->width;
+		plane->height = conn->height;
+		break;
+	case DRM_PLANE_TYPE_CURSOR:;
+		// Some drivers *require* the FB to have exactly this size
+		uint64_t width, height;
+		if (drmGetCap(plane->dev->fd, DRM_CAP_CURSOR_WIDTH, &width) != 0) {
+			fatal("drmGetCap(DRM_CAP_CURSOR_WIDTH) failed");
+		}
+		if (drmGetCap(plane->dev->fd, DRM_CAP_CURSOR_HEIGHT, &height) != 0) {
+			fatal("drmGetCap(DRM_CAP_CURSOR_HEIGHT) failed");
+		}
+		plane->width = width;
+		plane->height = height;
+		break;
+	}
+
+	return true;
 }
 
 static void plane_update(struct plane *plane, drmModeAtomicReq *req) {
