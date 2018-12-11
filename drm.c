@@ -14,8 +14,6 @@
 #include "dp.h"
 #include "util.h"
 
-#define ENCODERS_CAP 32
-
 struct encoder {
 	uint32_t id;
 	uint32_t possible_crtcs;
@@ -54,8 +52,8 @@ void device_init(struct device *dev, const char *path) {
 		fatal("drmModeGetResources failed");
 	}
 
-	struct encoder encoders[ENCODERS_CAP];
 	size_t encoders_len = res->count_encoders;
+	struct encoder *encoders = xalloc(encoders_len * sizeof(struct encoder));
 	for (int i = 0; i < res->count_encoders; ++i) {
 		drmModeEncoder *enc = drmModeGetEncoder(fd, res->encoders[i]);
 		if (enc == NULL) {
@@ -69,17 +67,21 @@ void device_init(struct device *dev, const char *path) {
 	}
 
 	// CRTCs need to be initialized before connectors
+	dev->crtcs = xalloc(res->count_crtcs * sizeof(struct crtc));
 	for (int i = 0; i < res->count_crtcs; ++i) {
 		struct crtc *crtc = &dev->crtcs[dev->crtcs_len];
 		crtc_init(crtc, dev, res->crtcs[i]);
 		++dev->crtcs_len;
 	}
 
+	dev->connectors = xalloc(res->count_connectors * sizeof(struct connector));
 	for (int i = 0; i < res->count_connectors; ++i) {
 		struct connector *conn = &dev->connectors[dev->connectors_len];
 		connector_init(conn, dev, res->connectors[i], encoders, encoders_len);
 		++dev->connectors_len;
 	}
+
+	free(encoders);
 
 	drmModeFreeResources(res);
 
@@ -88,6 +90,7 @@ void device_init(struct device *dev, const char *path) {
 		fatal("drmModeGetPlaneResources failed");
 	}
 
+	dev->planes = xalloc(plane_res->count_planes * sizeof(struct plane));
 	for (uint32_t i = 0; i < plane_res->count_planes; ++i) {
 		struct plane *plane = &dev->planes[dev->planes_len];
 		plane_init(plane, dev, plane_res->planes[i]);
@@ -114,6 +117,9 @@ void device_finish(struct device *dev) {
 		connector_finish(&dev->connectors[i]);
 	}
 
+	free(dev->planes);
+	free(dev->crtcs);
+	free(dev->connectors);
 	drmModeAtomicFree(dev->atomic_req);
 	close(dev->fd);
 }
@@ -152,7 +158,7 @@ void device_commit(struct device *dev, uint32_t flags) {
 	}
 
 	if (drmModeAtomicCommit(dev->fd, dev->atomic_req, flags, NULL)) {
-		fatal_errno("atomic commit failed");
+		fatal_errno("drmModeAtomicCommit failed");
 	}
 
 	drmModeAtomicSetCursor(dev->atomic_req, cursor);
@@ -177,7 +183,7 @@ void read_obj_props(struct device *dev, uint32_t obj_id, uint32_t obj_type,
 	drmModeObjectProperties *obj_props =
 		drmModeObjectGetProperties(dev->fd, obj_id, obj_type);
 	if (!obj_props) {
-		fatal_errno("Failed to get DRM object properties");
+		fatal_errno("drmModeObjectGetProperties failed");
 	}
 
 	bool seen[props_len + 1];
@@ -186,7 +192,7 @@ void read_obj_props(struct device *dev, uint32_t obj_id, uint32_t obj_type,
 		drmModePropertyRes *prop =
 			drmModeGetProperty(dev->fd, obj_props->props[i]);
 		if (!prop) {
-			fatal_errno("Failed to get DRM property");
+			fatal_errno("drmModeGetProperty failed");
 		}
 
 		struct prop *p = bsearch(prop->name, props, props_len,

@@ -10,25 +10,25 @@
 #include <stdio.h>
 
 int main(int argc, char *argv[]) {
-	struct device *dev = xalloc(sizeof(*dev));
-	device_init(dev, "/dev/dri/card0");
+	struct device dev = { 0 };
+	device_init(&dev, "/dev/dri/card0");
 
-	if (dev->connectors_len == 0) {
+	if (dev.connectors_len == 0) {
 		fatal("no connector");
 	}
-	struct connector *conn = &dev->connectors[0];
+	struct connector *conn = &dev.connectors[0];
 	if (conn->state != DRM_MODE_CONNECTED || conn->crtc == NULL) {
 		fatal("conn-id %"PRIu32" not connected", conn->id);
 	}
 
-	device_commit(dev,
+	device_commit(&dev,
 		DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK);
 
 	struct dumb_framebuffer fbs[PLANES_CAP];
 	size_t fbs_len = 0;
 
-	for (size_t i = 0; i < dev->planes_len; ++i) {
-		struct plane *plane = &dev->planes[i];
+	for (size_t i = 0; i < dev.planes_len; ++i) {
+		struct plane *plane = &dev.planes[i];
 
 		if (!plane_set_crtc(plane, conn->crtc)) {
 			continue;
@@ -40,7 +40,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		struct dumb_framebuffer *fb = &fbs[fbs_len];
-		dumb_framebuffer_init(fb, dev, fb_fmt,
+		dumb_framebuffer_init(fb, &dev, fb_fmt,
 			plane->width, plane->height);
 		++fbs_len;
 
@@ -55,8 +55,8 @@ int main(int argc, char *argv[]) {
 	};
 	const size_t colors_len = sizeof(colors) / sizeof(colors[0]);
 
-	for (size_t i = 0; i < dev->planes_len; ++i) {
-		struct plane *plane = &dev->planes[i];
+	for (size_t i = 0; i < dev.planes_len; ++i) {
+		struct plane *plane = &dev.planes[i];
 		if (plane->crtc != conn->crtc) {
 			continue;
 		}
@@ -83,7 +83,7 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	device_commit(dev, DRM_MODE_ATOMIC_NONBLOCK);
+	device_commit(&dev, DRM_MODE_ATOMIC_NONBLOCK);
 
 	for (int i = 0; i < 60 * 5; ++i) {
 		struct timespec ts = { .tv_nsec = 16666667 };
@@ -94,7 +94,6 @@ int main(int argc, char *argv[]) {
 		dumb_framebuffer_finish(&fbs[i]);
 	}
 
-	device_finish(dev);
-	free(dev);
+	device_finish(&dev);
 	return EXIT_SUCCESS;
 }

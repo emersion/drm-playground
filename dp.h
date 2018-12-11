@@ -93,13 +93,13 @@ struct device {
 	drmModeAtomicReq *atomic_req;
 
 	size_t connectors_len;
-	struct connector connectors[CONNECTORS_CAP];
+	struct connector *connectors;
 
 	size_t crtcs_len;
-	struct crtc crtcs[CRTCS_CAP];
+	struct crtc *crtcs;
 
 	size_t planes_len;
-	struct plane planes[PLANES_CAP];
+	struct plane *planes;
 };
 
 void device_init(struct device *dev, const char *path);
