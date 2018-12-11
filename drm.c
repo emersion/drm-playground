@@ -232,8 +232,17 @@ void plane_init(struct plane *plane, struct connector *conn,
 		plane->width = conn->width;
 		plane->height = conn->height;
 		break;
-	case DRM_PLANE_TYPE_CURSOR:
-		plane->width = plane->height = 20;
+	case DRM_PLANE_TYPE_CURSOR:;
+		// Some drivers *require* the FB to have exactly this size
+		uint64_t width, height;
+		if (drmGetCap(conn->dev->fd, DRM_CAP_CURSOR_WIDTH, &width) != 0) {
+			fatal("drmGetCap(DRM_CAP_CURSOR_WIDTH) failed");
+		}
+		if (drmGetCap(conn->dev->fd, DRM_CAP_CURSOR_HEIGHT, &height) != 0) {
+			fatal("drmGetCap(DRM_CAP_CURSOR_HEIGHT) failed");
+		}
+		plane->width = width;
+		plane->height = height;
 		break;
 	}
 
@@ -257,8 +266,7 @@ void plane_init(struct plane *plane, struct connector *conn,
 
 	drmModeFreePlane(drm_plane);
 
-	// TODO: dumb buffers don't seem to work with cursor planes
-	if (fb_fmt != DRM_FORMAT_INVALID && plane->type != DRM_PLANE_TYPE_CURSOR) {
+	if (fb_fmt != DRM_FORMAT_INVALID) {
 		dumb_framebuffer_init(&plane->fb, conn->dev, fb_fmt,
 			plane->width, plane->height);
 	}
