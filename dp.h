@@ -6,7 +6,6 @@
 #include <sys/types.h>
 
 #include <drm_mode.h>
-#include <gbm.h>
 #include <xf86drmMode.h>
 
 #define CONNECTORS_CAP 32
@@ -91,7 +90,6 @@ struct connector {
 
 struct device {
 	int fd;
-	struct gbm_device *gbm;
 	drmModeAtomicReq *atomic_req;
 
 	size_t connectors_len;

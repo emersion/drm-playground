@@ -44,11 +44,6 @@ void device_init(struct device *dev, const char *path) {
 
 	dev->fd = fd;
 
-	dev->gbm = gbm_create_device(fd);
-	if (!dev->gbm) {
-		fatal_errno("failed to create GBM device");
-	}
-
 	dev->atomic_req = drmModeAtomicAlloc();
 	if (!dev->atomic_req) {
 		fatal_errno("drmModeAtomicAlloc failed");
@@ -120,7 +115,6 @@ void device_finish(struct device *dev) {
 	}
 
 	drmModeAtomicFree(dev->atomic_req);
-	gbm_device_destroy(dev->gbm);
 	close(dev->fd);
 }
 

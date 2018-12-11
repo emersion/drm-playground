@@ -19,7 +19,6 @@ executable('drm_playground',
 	]),
 	dependencies: [
 		dependency('libdrm'),
-		dependency('gbm'),
 		meson.get_compiler('c').find_library('m'),
 	],
 	install: true,
