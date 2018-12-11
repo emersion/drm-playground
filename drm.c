@@ -14,6 +14,12 @@
 #include "dp.h"
 #include "util.h"
 
+static void connector_init(struct connector *conn, struct device *dev,
+	uint32_t conn_id);
+static void crtc_init(struct crtc *crtc, struct device *dev, uint32_t crtc_id);
+static void plane_init(struct plane *plane, struct device *dev,
+	uint32_t plane_id);
+
 struct device *device_open(const char *path) {
 	printf("opening device \"%s\"\n", path);
 
@@ -37,8 +43,44 @@ struct device *device_open(const char *path) {
 		fatal_errno("failed to create GBM device");
 	}
 
+	drmModeRes *res = drmModeGetResources(dev->fd);
+	if (!res) {
+		fatal("drmModeGetResources failed");
+	}
+
+	for (int i = 0; i < res->count_crtcs; ++i) {
+		struct crtc *crtc = &dev->crtcs[dev->crtcs_len];
+		crtc_init(crtc, dev, res->crtcs[i]);
+		++dev->crtcs_len;
+	}
+
+	for (int i = 0; i < res->count_connectors; ++i) {
+		struct connector *conn = &dev->connectors[dev->connectors_len];
+		connector_init(conn, dev, res->connectors[i]);
+		++dev->connectors_len;
+	}
+
+	drmModeFreeResources(res);
+
+	drmModePlaneRes *plane_res = drmModeGetPlaneResources(dev->fd);
+	if (!res) {
+		fatal("drmModeGetPlaneResources failed");
+	}
+
+	for (uint32_t i = 0; i < plane_res->count_planes; ++i) {
+		struct plane *plane = &dev->planes[dev->planes_len];
+		plane_init(plane, dev, plane_res->planes[i]);
+		++dev->planes_len;
+	}
+
+	drmModeFreePlaneResources(plane_res);
+
 	return dev;
 }
+
+static void connector_finish(struct connector *conn);
+static void crtc_finish(struct crtc *crtc);
+static void plane_finish(struct plane *plane);
 
 void device_destroy(struct device *dev) {
 	if (!dev) {
@@ -47,6 +89,10 @@ void device_destroy(struct device *dev) {
 
 	for (size_t i = 0; i < dev->planes_len; ++i) {
 		plane_finish(&dev->planes[i]);
+	}
+
+	for (size_t i = 0; i < dev->crtcs_len; ++i) {
+		crtc_finish(&dev->crtcs[i]);
 	}
 
 	for (size_t i = 0; i < dev->connectors_len; ++i) {
@@ -111,102 +157,91 @@ void read_obj_props(struct device *dev, uint32_t obj_id, uint32_t obj_type,
 	drmModeFreeObjectProperties(obj_props);
 }
 
-void connector_init(struct connector *conn, struct device *dev,
+static void connector_init(struct connector *conn, struct device *dev,
 		uint32_t conn_id) {
 	printf("initializing conn-id %"PRIu32"\n", conn_id);
 
 	conn->dev = dev;
 	conn->id = conn_id;
 
+	uint32_t crtc_id = 0;
+	struct prop conn_props[] = {
+		{ "CRTC_ID", &conn->props.crtc_id, &crtc_id, true },
+	};
+	read_obj_props(dev, conn_id, DRM_MODE_OBJECT_CONNECTOR, conn_props,
+		sizeof(conn_props) / sizeof(conn_props[0]));
+
+	if (crtc_id != 0) {
+		for (size_t i = 0; i < dev->crtcs_len; ++i) {
+			struct crtc *crtc = &dev->crtcs[i];
+			if (crtc->id == crtc_id) {
+				conn->crtc = crtc;
+				break;
+			}
+		}
+	}
+
 	drmModeConnector *drm_conn = drmModeGetConnector(dev->fd, conn_id);
 	if (!drm_conn) {
 		fatal_errno("failed to get conn-id %"PRIu32, conn_id);
 	}
 
-	if (drm_conn->connection != DRM_MODE_CONNECTED ||
-			drm_conn->count_modes == 0) {
-		fatal("conn-id %"PRIu32" not connected", conn_id);
-	}
+	conn->state = drm_conn->connection;
 
-	if (drmModeCreatePropertyBlob(dev->fd, &drm_conn->modes[0],
-			sizeof(drm_conn->modes[0]), &conn->mode_id)) {
-		fatal_errno("failed to create DRM property blob for mode");
+	// TODO: get current mode instead of forcing one
+	if (conn->crtc != NULL && drm_conn->connection == DRM_MODE_CONNECTED &&
+			drm_conn->count_modes > 0) {
+		crtc_set_mode(conn->crtc, &drm_conn->modes[0]);
 	}
-
-	conn->width = drm_conn->modes[0].hdisplay;
-	conn->height = drm_conn->modes[0].vdisplay;
 
 	drmModeFreeConnector(drm_conn);
 
-	struct prop conn_props[] = {
-		{ "CRTC_ID", &conn->props.crtc_id, &conn->crtc_id, true },
-	};
-	read_obj_props(dev, conn_id, DRM_MODE_OBJECT_CONNECTOR, conn_props,
-		sizeof(conn_props) / sizeof(conn_props[0]));
-
-	drmModeRes *res = drmModeGetResources(dev->fd);
-	if (!res) {
-		fatal("drmModeGetResources failed");
-	}
-
-	conn->crtc_idx = -1;
-	for (int i = 0; i < res->count_crtcs; ++i) {
-		if (res->crtcs[i] == conn->crtc_id) {
-			conn->crtc_idx = i;
-			break;
-		}
-	}
-	if (conn->crtc_idx == -1) {
-		fatal("failed to find CRTC in list");
-	}
-
-	drmModeFreeResources(res);
-
-	struct prop crtc_props[] = {
-		{ "ACTIVE", &conn->crtc_props.active, NULL, true },
-		{ "MODE_ID", &conn->crtc_props.mode_id, NULL, true },
-	};
-	read_obj_props(dev, conn->crtc_id, DRM_MODE_OBJECT_CRTC, crtc_props,
-		sizeof(crtc_props) / sizeof(crtc_props[0]));
-
-	conn->old_crtc = drmModeGetCrtc(dev->fd, conn->crtc_id);
+	conn->old_crtc = drmModeGetCrtc(dev->fd, crtc_id);
 
 	conn->atomic = drmModeAtomicAlloc();
 	if (!conn->atomic) {
 		fatal_errno("drmModeAtomicAlloc failed");
 	}
 
-	printf("using crtc-id %"PRIu32" for conn-id %"PRIu32"\n", conn->crtc_id, conn_id);
-	printf("using mode-id %"PRIu32" for conn-id %"PRIu32"\n", conn->mode_id, conn_id);
-
-	drmModeAtomicAddProperty(conn->atomic, conn->id, conn->props.crtc_id, conn->crtc_id);
-	drmModeAtomicAddProperty(conn->atomic, conn->crtc_id, conn->crtc_props.active, 1);
-	drmModeAtomicAddProperty(conn->atomic, conn->crtc_id, conn->crtc_props.mode_id, conn->mode_id);
-
-	connector_commit(conn, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK);
+	// TODO: make the user responsible for this
+	connector_commit(conn,
+		DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK);
 }
 
-void connector_finish(struct connector *conn) {
+static void connector_finish(struct connector *conn) {
 	struct device *dev = conn->dev;
 
-	drmModeDestroyPropertyBlob(dev->fd, conn->mode_id);
 	drmModeAtomicFree(conn->atomic);
 
 	drmModeCrtc *c = conn->old_crtc;
-	drmModeSetCrtc(dev->fd, c->crtc_id, c->buffer_id, c->x, c->y,
-		&conn->id, 1, &c->mode);
-	drmModeFreeCrtc(conn->old_crtc);
+	if (c != NULL) {
+		drmModeSetCrtc(dev->fd, c->crtc_id, c->buffer_id, c->x, c->y,
+			&conn->id, 1, &c->mode);
+		drmModeFreeCrtc(conn->old_crtc);
+	}
+}
+
+static void connector_update(struct connector *conn, drmModeAtomicReq *req) {
+	uint32_t crtc_id = (conn->crtc != NULL) ? conn->crtc->id : 0;
+	drmModeAtomicAddProperty(req, conn->id, conn->props.crtc_id, crtc_id);
 }
 
 static void plane_update(struct plane *plane, drmModeAtomicReq *req);
+static void crtc_update(struct crtc *crtc, drmModeAtomicReq *req);
 
 void connector_commit(struct connector *conn, uint32_t flags) {
 	struct device *dev = conn->dev;
 	int cursor = drmModeAtomicGetCursor(conn->atomic);
 
+	connector_update(conn, conn->atomic);
+
+	if (conn->crtc != NULL) {
+		crtc_update(conn->crtc, conn->atomic);
+	}
+
 	for (size_t i = 0; i < dev->planes_len; ++i) {
 		struct plane *plane = &dev->planes[i];
-		if (plane->conn == conn) {
+		if (plane->crtc == conn->crtc) {
 			plane_update(plane, conn->atomic);
 		}
 	}
@@ -218,7 +253,53 @@ void connector_commit(struct connector *conn, uint32_t flags) {
 	drmModeAtomicSetCursor(conn->atomic, cursor);
 }
 
-void plane_init(struct plane *plane, struct device *dev, uint32_t plane_id) {
+static void crtc_init(struct crtc *crtc, struct device *dev, uint32_t crtc_id) {
+	crtc->dev = dev;
+	crtc->id = crtc_id;
+
+	// TODO: read current mode and active state
+	struct prop crtc_props[] = {
+		{ "ACTIVE", &crtc->props.active, NULL, true },
+		{ "MODE_ID", &crtc->props.mode_id, NULL, true },
+	};
+	read_obj_props(dev, crtc_id, DRM_MODE_OBJECT_CRTC, crtc_props,
+		sizeof(crtc_props) / sizeof(crtc_props[0]));
+}
+
+static void crtc_finish(struct crtc *crtc) {
+	struct device *dev = crtc->dev;
+	drmModeDestroyPropertyBlob(dev->fd, crtc->mode_id);
+}
+
+static void crtc_update(struct crtc *crtc, drmModeAtomicReq *req) {
+	drmModeAtomicAddProperty(req, crtc->id, crtc->props.active, 1);
+	drmModeAtomicAddProperty(req, crtc->id, crtc->props.mode_id, crtc->mode_id);
+}
+
+void crtc_set_mode(struct crtc *crtc, drmModeModeInfo *mode) {
+	struct device *dev = crtc->dev;
+
+	if (crtc->mode_id != 0) {
+		drmModeDestroyPropertyBlob(dev->fd, crtc->mode_id);
+		crtc->mode_id = 0;
+		crtc->width = crtc->height = 0;
+	}
+
+	if (mode == NULL) {
+		return;
+	}
+
+	if (drmModeCreatePropertyBlob(dev->fd, mode, sizeof(*mode),
+			&crtc->mode_id)) {
+		fatal_errno("failed to create DRM property blob for mode");
+	}
+
+	crtc->width = mode->hdisplay;
+	crtc->height = mode->vdisplay;
+}
+
+static void plane_init(struct plane *plane, struct device *dev,
+		uint32_t plane_id) {
 	printf("initializing plane-id %"PRIu32"\n", plane_id);
 
 	plane->dev = dev;
@@ -233,6 +314,7 @@ void plane_init(struct plane *plane, struct device *dev, uint32_t plane_id) {
 
 	plane->alpha = 1.0;
 
+	// TODO: read the properties
 	struct prop plane_props[] = {
 		{ "CRTC_H", &plane->props.crtc_h, NULL, true },
 		{ "CRTC_ID", &plane->props.crtc_id, NULL, true },
@@ -253,13 +335,15 @@ void plane_init(struct plane *plane, struct device *dev, uint32_t plane_id) {
 	printf("plane-id %"PRIu32" has type %"PRIu32"\n", plane_id, plane->type);
 }
 
-void plane_finish(struct plane *plane) {}
+static void plane_finish(struct plane *plane) {
+	// No-op
+}
 
 uint32_t plane_dumb_format(struct plane *plane) {
 	uint32_t fb_fmt = DRM_FORMAT_INVALID;
 
 	// We could use IN_FORMATS instead here, but it's not yet widely supported
-	drmModePlane *drm_plane = drmModeGetPlane(plane->conn->dev->fd, plane->id);
+	drmModePlane *drm_plane = drmModeGetPlane(plane->dev->fd, plane->id);
 	if (!plane) {
 		fatal("drmModeGetPlane failed");
 	}
@@ -283,14 +367,17 @@ void plane_set_framebuffer(struct plane *plane, struct framebuffer *fb) {
 	plane->fb = fb;
 }
 
-bool plane_set_connector(struct plane *plane, struct connector *conn) {
-	if (conn && (plane->possible_crtcs & (1 << conn->crtc_idx)) == 0) {
-		return false;
+bool plane_set_crtc(struct plane *plane, struct crtc *crtc) {
+	if (crtc != NULL) {
+		size_t crtc_idx = crtc - plane->dev->crtcs;
+		if ((plane->possible_crtcs & (1 << crtc_idx)) == 0) {
+			return false;
+		}
 	}
 
-	plane->conn = conn;
+	plane->crtc = crtc;
 
-	if (conn == NULL) {
+	if (crtc == NULL) {
 		plane->width = plane->height = 0;
 		return true;
 	}
@@ -300,8 +387,8 @@ bool plane_set_connector(struct plane *plane, struct connector *conn) {
 		plane->width = plane->height = 100;
 		break;
 	case DRM_PLANE_TYPE_PRIMARY:
-		plane->width = conn->width;
-		plane->height = conn->height;
+		plane->width = crtc->width;
+		plane->height = crtc->height;
 		break;
 	case DRM_PLANE_TYPE_CURSOR:;
 		// Some drivers *require* the FB to have exactly this size
@@ -321,7 +408,7 @@ bool plane_set_connector(struct plane *plane, struct connector *conn) {
 }
 
 static void plane_update(struct plane *plane, drmModeAtomicReq *req) {
-	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_id, plane->conn->crtc_id);
+	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_id, plane->crtc->id);
 
 	if (!plane->fb) {
 		return;

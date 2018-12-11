@@ -1,3 +1,4 @@
+#include <inttypes.h>
 #include <stdlib.h>
 #include <time.h>
 
@@ -9,32 +10,13 @@
 int main(int argc, char *argv[]) {
 	struct device *dev = device_open("/dev/dri/card0");
 
-	drmModeRes *res = drmModeGetResources(dev->fd);
-	if (!res) {
-		fatal("drmModeGetResources failed");
-	}
-
-	if (res->count_connectors == 0) {
+	if (dev->connectors_len == 0) {
 		fatal("no connector");
 	}
 	struct connector *conn = &dev->connectors[0];
-	connector_init(conn, dev, res->connectors[0]);
-	++dev->connectors_len;
-
-	drmModeFreeResources(res);
-
-	drmModePlaneRes *plane_res = drmModeGetPlaneResources(dev->fd);
-	if (!res) {
-		fatal("drmModeGetPlaneResources failed");
+	if (conn->state != DRM_MODE_CONNECTED || conn->crtc == NULL) {
+		fatal("conn-id %"PRIu32" not connected", conn->id);
 	}
-
-	for (uint32_t i = 0; i < plane_res->count_planes; ++i) {
-		struct plane *plane = &dev->planes[dev->planes_len];
-		plane_init(plane, dev, plane_res->planes[i]);
-		++dev->planes_len;
-	}
-
-	drmModeFreePlaneResources(plane_res);
 
 	struct dumb_framebuffer fbs[PLANES_CAP];
 	size_t fbs_len = 0;
@@ -42,7 +24,7 @@ int main(int argc, char *argv[]) {
 	for (size_t i = 0; i < dev->planes_len; ++i) {
 		struct plane *plane = &dev->planes[i];
 
-		if (!plane_set_connector(plane, conn)) {
+		if (!plane_set_crtc(plane, conn->crtc)) {
 			continue;
 		}
 
@@ -69,7 +51,7 @@ int main(int argc, char *argv[]) {
 
 	for (size_t i = 0; i < dev->planes_len; ++i) {
 		struct plane *plane = &dev->planes[i];
-		if (plane->conn != conn) {
+		if (plane->crtc != conn->crtc) {
 			continue;
 		}
 

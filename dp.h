@@ -18,7 +18,6 @@ struct connector;
 
 struct framebuffer {
 	struct device *dev;
-
 	uint32_t id;
 	uint32_t width;
 	uint32_t height;
@@ -36,19 +35,17 @@ struct dumb_framebuffer {
 
 struct plane {
 	struct device *dev;
-	struct connector *conn; // can be NULL
-
 	uint32_t id;
 	uint32_t type;
 	uint32_t possible_crtcs;
 
+	struct crtc *crtc; // can be NULL
+	struct framebuffer *fb; // can be NULL
 	uint32_t x;
 	uint32_t y;
 	uint32_t width;
 	uint32_t height;
 	float alpha;
-
-	struct framebuffer *fb;
 
 	struct {
 		uint32_t alpha;
@@ -66,41 +63,44 @@ struct plane {
 	} props;
 };
 
-struct connector {
+struct crtc {
 	struct device *dev;
-
 	uint32_t id;
-	uint32_t crtc_id;
-	ssize_t crtc_idx;
 
 	uint32_t mode_id;
 	uint32_t width;
 	uint32_t height;
 
-	drmModeCrtc *old_crtc;
+	struct {
+		uint32_t active;
+		uint32_t mode_id;
+	} props;
+};
+
+struct connector {
+	struct device *dev;
+	uint32_t id;
+	drmModeConnection state;
+
+	struct crtc *crtc; // can be NULL
 
 	struct {
 		uint32_t crtc_id;
 	} props;
 
-	struct {
-		uint32_t active;
-		uint32_t mode_id;
-	} crtc_props;
-
+	drmModeCrtc *old_crtc;
 	drmModeAtomicReq *atomic;
-
-	uint64_t start_ns;
-	uint64_t curr_ns;
 };
 
 struct device {
 	int fd;
-
 	struct gbm_device *gbm;
 
 	size_t connectors_len;
 	struct connector connectors[CONNECTORS_CAP];
+
+	size_t crtcs_len;
+	struct crtc crtcs[CRTCS_CAP];
 
 	size_t planes_len;
 	struct plane planes[PLANES_CAP];
@@ -109,16 +109,14 @@ struct device {
 struct device *device_open(const char *path);
 void device_destroy(struct device *dev);
 
-void connector_init(struct connector *conn, struct device *dev,
-	uint32_t conn_id);
-void connector_finish(struct connector *conn);
+void connector_set_crtc(struct connector *conn, struct crtc *crtc);
 void connector_commit(struct connector *conn, uint32_t flags);
 
-void plane_init(struct plane *plane, struct device *dev, uint32_t plane_id);
-void plane_finish(struct plane *plane);
+void crtc_set_mode(struct crtc *crtc, drmModeModeInfo *mode);
+
 uint32_t plane_dumb_format(struct plane *plane);
 void plane_set_framebuffer(struct plane *plane, struct framebuffer *fb);
-bool plane_set_connector(struct plane *plane, struct connector *conn);
+bool plane_set_crtc(struct plane *plane, struct crtc *crtc);
 
 void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,
 	uint32_t fmt, uint32_t width, uint32_t height);
