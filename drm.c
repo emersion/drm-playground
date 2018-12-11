@@ -20,7 +20,7 @@ static void crtc_init(struct crtc *crtc, struct device *dev, uint32_t crtc_id);
 static void plane_init(struct plane *plane, struct device *dev,
 	uint32_t plane_id);
 
-struct device *device_open(const char *path) {
+void device_init(struct device *dev, const char *path) {
 	printf("opening device \"%s\"\n", path);
 
 	int fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
@@ -35,7 +35,6 @@ struct device *device_open(const char *path) {
 		fatal("DRM device must support universal planes");
 	}
 
-	struct device *dev = xalloc(sizeof(*dev));
 	dev->fd = fd;
 
 	dev->gbm = gbm_create_device(fd);
@@ -74,19 +73,13 @@ struct device *device_open(const char *path) {
 	}
 
 	drmModeFreePlaneResources(plane_res);
-
-	return dev;
 }
 
 static void connector_finish(struct connector *conn);
 static void crtc_finish(struct crtc *crtc);
 static void plane_finish(struct plane *plane);
 
-void device_destroy(struct device *dev) {
-	if (!dev) {
-		return;
-	}
-
+void device_finish(struct device *dev) {
 	for (size_t i = 0; i < dev->planes_len; ++i) {
 		plane_finish(&dev->planes[i]);
 	}
@@ -101,7 +94,6 @@ void device_destroy(struct device *dev) {
 
 	gbm_device_destroy(dev->gbm);
 	close(dev->fd);
-	free(dev);
 }
 
 struct prop {

@@ -106,8 +106,8 @@ struct device {
 	struct plane planes[PLANES_CAP];
 };
 
-struct device *device_open(const char *path);
-void device_destroy(struct device *dev);
+void device_init(struct device *dev, const char *path);
+void device_finish(struct device *dev);
 
 void connector_set_crtc(struct connector *conn, struct crtc *crtc);
 void connector_commit(struct connector *conn, uint32_t flags);

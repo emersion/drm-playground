@@ -7,8 +7,11 @@
 #include "dp.h"
 #include "util.h"
 
+#include <stdio.h>
+
 int main(int argc, char *argv[]) {
-	struct device *dev = device_open("/dev/dri/card0");
+	struct device *dev = xalloc(sizeof(*dev));
+	device_init(dev, "/dev/dri/card0");
 
 	if (dev->connectors_len == 0) {
 		fatal("no connector");
@@ -88,6 +91,7 @@ int main(int argc, char *argv[]) {
 		dumb_framebuffer_finish(&fbs[i]);
 	}
 
-	device_destroy(dev);
+	device_finish(dev);
+	free(dev);
 	return EXIT_SUCCESS;
 }
