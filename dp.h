@@ -81,6 +81,7 @@ struct connector {
 	struct device *dev;
 	uint32_t id;
 	drmModeConnection state;
+	uint32_t possible_crtcs;
 
 	struct crtc *crtc; // can be NULL
 
@@ -109,7 +110,7 @@ struct device {
 void device_init(struct device *dev, const char *path);
 void device_finish(struct device *dev);
 
-void connector_set_crtc(struct connector *conn, struct crtc *crtc);
+bool connector_set_crtc(struct connector *conn, struct crtc *crtc);
 void connector_commit(struct connector *conn, uint32_t flags);
 
 void crtc_set_mode(struct crtc *crtc, drmModeModeInfo *mode);

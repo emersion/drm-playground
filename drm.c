@@ -14,8 +14,15 @@
 #include "dp.h"
 #include "util.h"
 
+#define ENCODERS_CAP 32
+
+struct encoder {
+	uint32_t id;
+	uint32_t possible_crtcs;
+};
+
 static void connector_init(struct connector *conn, struct device *dev,
-	uint32_t conn_id);
+	uint32_t conn_id, struct encoder *encoders, size_t encoders_len);
 static void crtc_init(struct crtc *crtc, struct device *dev, uint32_t crtc_id);
 static void plane_init(struct plane *plane, struct device *dev,
 	uint32_t plane_id);
@@ -47,6 +54,20 @@ void device_init(struct device *dev, const char *path) {
 		fatal("drmModeGetResources failed");
 	}
 
+	struct encoder encoders[ENCODERS_CAP];
+	size_t encoders_len = res->count_encoders;
+	for (int i = 0; i < res->count_encoders; ++i) {
+		drmModeEncoder *enc = drmModeGetEncoder(fd, res->encoders[i]);
+		if (enc == NULL) {
+			fatal("drmModeGetEncoder failed");
+		}
+		encoders[i] = (struct encoder){
+			.id = res->encoders[i],
+			.possible_crtcs = enc->possible_crtcs,
+		};
+		drmModeFreeEncoder(enc);
+	}
+
 	// CRTCs need to be initialized before connectors
 	for (int i = 0; i < res->count_crtcs; ++i) {
 		struct crtc *crtc = &dev->crtcs[dev->crtcs_len];
@@ -56,7 +77,7 @@ void device_init(struct device *dev, const char *path) {
 
 	for (int i = 0; i < res->count_connectors; ++i) {
 		struct connector *conn = &dev->connectors[dev->connectors_len];
-		connector_init(conn, dev, res->connectors[i]);
+		connector_init(conn, dev, res->connectors[i], encoders, encoders_len);
 		++dev->connectors_len;
 	}
 
@@ -165,8 +186,8 @@ void read_obj_props(struct device *dev, uint32_t obj_id, uint32_t obj_type,
 }
 
 static void connector_init(struct connector *conn, struct device *dev,
-		uint32_t conn_id) {
-	printf("initializing conn-id %"PRIu32"\n", conn_id);
+		uint32_t conn_id, struct encoder *encoders, size_t encoders_len) {
+	printf("initializing connector %"PRIu32"\n", conn_id);
 
 	conn->dev = dev;
 	conn->id = conn_id;
@@ -178,19 +199,37 @@ static void connector_init(struct connector *conn, struct device *dev,
 	read_obj_props(dev, conn_id, DRM_MODE_OBJECT_CONNECTOR, conn_props,
 		sizeof(conn_props) / sizeof(conn_props[0]));
 
-	conn->crtc = device_find_crtc(dev, crtc_id);
-
 	drmModeConnector *drm_conn = drmModeGetConnector(dev->fd, conn_id);
 	if (!drm_conn) {
-		fatal_errno("failed to get conn-id %"PRIu32, conn_id);
+		fatal_errno("failed to get connector %"PRIu32, conn_id);
 	}
 
 	conn->state = drm_conn->connection;
 
 	// TODO: get current mode instead of forcing one
-	if (conn->crtc != NULL && drm_conn->connection == DRM_MODE_CONNECTED &&
-			drm_conn->count_modes > 0) {
-		crtc_set_mode(conn->crtc, &drm_conn->modes[0]);
+	bool has_mode = (drm_conn->count_modes > 0);
+	drmModeModeInfo mode;
+	if (has_mode) {
+		mode = drm_conn->modes[0];
+	}
+
+	conn->possible_crtcs = (uint32_t)~0;
+	for (int i = 0; i < drm_conn->count_encoders; ++i) {
+		uint32_t enc_id = drm_conn->encoders[i];
+		bool found = false;
+		for (size_t j = 0; j < encoders_len; ++i) {
+			if (encoders[i].id == enc_id) {
+				conn->possible_crtcs &= encoders[i].possible_crtcs;
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			fatal("failed to find encoder %"PRIu32, enc_id);
+		}
+	}
+	if (drm_conn->count_encoders == 0) {
+		conn->possible_crtcs = 0;
 	}
 
 	drmModeFreeConnector(drm_conn);
@@ -200,6 +239,13 @@ static void connector_init(struct connector *conn, struct device *dev,
 	conn->atomic = drmModeAtomicAlloc();
 	if (!conn->atomic) {
 		fatal_errno("drmModeAtomicAlloc failed");
+	}
+
+	if (!connector_set_crtc(conn, device_find_crtc(dev, crtc_id))) {
+		fatal("failed to set CRTC for connector %"PRIu32, conn->id);
+	}
+	if (conn->crtc != NULL && conn->state == DRM_MODE_CONNECTED && has_mode) {
+		crtc_set_mode(conn->crtc, &mode);
 	}
 
 	// TODO: make the user responsible for this
@@ -220,13 +266,27 @@ static void connector_finish(struct connector *conn) {
 	}
 }
 
+bool connector_set_crtc(struct connector *conn, struct crtc *crtc) {
+	if (crtc != NULL) {
+		size_t crtc_idx = crtc - conn->dev->crtcs;
+		if ((conn->possible_crtcs & (1 << crtc_idx)) == 0) {
+			return false;
+		}
+	}
+
+	printf("assigning CRTC %"PRIu32" to connector %"PRIu32"\n",
+		crtc ? crtc->id : 0, conn->id);
+	conn->crtc = crtc;
+	return true;
+}
+
 static void connector_update(struct connector *conn, drmModeAtomicReq *req) {
 	uint32_t crtc_id = (conn->crtc != NULL) ? conn->crtc->id : 0;
 	drmModeAtomicAddProperty(req, conn->id, conn->props.crtc_id, crtc_id);
 }
 
-static void plane_update(struct plane *plane, drmModeAtomicReq *req);
 static void crtc_update(struct crtc *crtc, drmModeAtomicReq *req);
+static void plane_update(struct plane *plane, drmModeAtomicReq *req);
 
 void connector_commit(struct connector *conn, uint32_t flags) {
 	struct device *dev = conn->dev;
@@ -236,12 +296,12 @@ void connector_commit(struct connector *conn, uint32_t flags) {
 
 	if (conn->crtc != NULL) {
 		crtc_update(conn->crtc, conn->atomic);
-	}
 
-	for (size_t i = 0; i < dev->planes_len; ++i) {
-		struct plane *plane = &dev->planes[i];
-		if (plane->crtc == conn->crtc) {
-			plane_update(plane, conn->atomic);
+		for (size_t i = 0; i < dev->planes_len; ++i) {
+			struct plane *plane = &dev->planes[i];
+			if (plane->crtc == conn->crtc) {
+				plane_update(plane, conn->atomic);
+			}
 		}
 	}
 
@@ -285,6 +345,7 @@ void crtc_set_mode(struct crtc *crtc, drmModeModeInfo *mode) {
 	}
 
 	if (mode == NULL) {
+		printf("assigning NULL mode to CRTC %"PRIu32"\n", crtc->id);
 		return;
 	}
 
@@ -295,11 +356,14 @@ void crtc_set_mode(struct crtc *crtc, drmModeModeInfo *mode) {
 
 	crtc->width = mode->hdisplay;
 	crtc->height = mode->vdisplay;
+
+	printf("assigning mode %"PRIu32"x%"PRIu32" to CRTC %"PRIu32"\n",
+		crtc->width, crtc->height, crtc->id);
 }
 
 static void plane_init(struct plane *plane, struct device *dev,
 		uint32_t plane_id) {
-	printf("initializing plane-id %"PRIu32"\n", plane_id);
+	printf("initializing plane %"PRIu32"\n", plane_id);
 
 	plane->dev = dev;
 	plane->id = plane_id;
@@ -334,7 +398,7 @@ static void plane_init(struct plane *plane, struct device *dev,
 
 	plane->crtc = device_find_crtc(dev, crtc_id);
 
-	printf("plane-id %"PRIu32" has type %"PRIu32"\n", plane_id, plane->type);
+	printf("plane %"PRIu32" has type %"PRIu32"\n", plane_id, plane->type);
 }
 
 static void plane_finish(struct plane *plane) {
@@ -381,6 +445,7 @@ bool plane_set_crtc(struct plane *plane, struct crtc *crtc) {
 
 	if (crtc == NULL) {
 		plane->width = plane->height = 0;
+		printf("assigning NULL CRTC to plane %"PRIu32"\n", plane->id);
 		return true;
 	}
 
@@ -406,26 +471,30 @@ bool plane_set_crtc(struct plane *plane, struct crtc *crtc) {
 		break;
 	}
 
+	printf("assigning CRTC %"PRIu32" to plane %"PRIu32"\n",
+		crtc->id, plane->id);
 	return true;
 }
 
 static void plane_update(struct plane *plane, drmModeAtomicReq *req) {
-	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_id, plane->crtc->id);
+	uint32_t crtc_id = (plane->crtc != NULL) ? plane->crtc->id : 0;
+	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_id, crtc_id);
 
-	if (!plane->fb) {
-		return;
-	}
+	uint32_t fb_id = (plane->fb != NULL) ? plane->fb->id : 0;
+	drmModeAtomicAddProperty(req, plane->id, plane->props.fb_id, fb_id);
 
-	drmModeAtomicAddProperty(req, plane->id, plane->props.fb_id, plane->fb->id);
 	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_x, plane->x);
 	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_y, plane->y);
 	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_w, plane->width);
 	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_h, plane->height);
-	// The src_* properties are in 16.16 fixed point
-	drmModeAtomicAddProperty(req, plane->id, plane->props.src_x, 0);
-	drmModeAtomicAddProperty(req, plane->id, plane->props.src_y, 0);
-	drmModeAtomicAddProperty(req, plane->id, plane->props.src_w, plane->fb->width << 16);
-	drmModeAtomicAddProperty(req, plane->id, plane->props.src_h, plane->fb->height << 16);
+
+	if (plane->fb != NULL) {
+		// The src_* properties are in 16.16 fixed point
+		drmModeAtomicAddProperty(req, plane->id, plane->props.src_x, 0);
+		drmModeAtomicAddProperty(req, plane->id, plane->props.src_y, 0);
+		drmModeAtomicAddProperty(req, plane->id, plane->props.src_w, plane->fb->width << 16);
+		drmModeAtomicAddProperty(req, plane->id, plane->props.src_h, plane->fb->height << 16);
+	}
 
 	if (plane->props.alpha) {
 		drmModeAtomicAddProperty(req, plane->id, plane->props.alpha, plane->alpha * 0xFFFF);
@@ -480,7 +549,7 @@ void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,
 
 	memset(fb->data, 0xFF, fb->size);
 
-	printf("dumb framebuffer initialized with fb-id %"PRIu32"\n", fb->fb.id);
+	printf("dumb framebuffer %"PRIu32" initialized\n", fb->fb.id);
 }
 
 void dumb_framebuffer_finish(struct dumb_framebuffer *fb) {
