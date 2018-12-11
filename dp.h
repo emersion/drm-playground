@@ -90,12 +90,12 @@ struct connector {
 	} props;
 
 	drmModeCrtc *old_crtc;
-	drmModeAtomicReq *atomic;
 };
 
 struct device {
 	int fd;
 	struct gbm_device *gbm;
+	drmModeAtomicReq *atomic_req;
 
 	size_t connectors_len;
 	struct connector connectors[CONNECTORS_CAP];
@@ -109,9 +109,9 @@ struct device {
 
 void device_init(struct device *dev, const char *path);
 void device_finish(struct device *dev);
+void device_commit(struct device *dev, uint32_t flags);
 
 bool connector_set_crtc(struct connector *conn, struct crtc *crtc);
-void connector_commit(struct connector *conn, uint32_t flags);
 
 void crtc_set_mode(struct crtc *crtc, drmModeModeInfo *mode);
 

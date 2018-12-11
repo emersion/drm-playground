@@ -21,6 +21,9 @@ int main(int argc, char *argv[]) {
 		fatal("conn-id %"PRIu32" not connected", conn->id);
 	}
 
+	device_commit(dev,
+		DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK);
+
 	struct dumb_framebuffer fbs[PLANES_CAP];
 	size_t fbs_len = 0;
 
@@ -80,7 +83,7 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	connector_commit(conn, DRM_MODE_ATOMIC_NONBLOCK);
+	device_commit(dev, DRM_MODE_ATOMIC_NONBLOCK);
 
 	for (int i = 0; i < 60 * 5; ++i) {
 		struct timespec ts = { .tv_nsec = 16666667 };

@@ -49,6 +49,11 @@ void device_init(struct device *dev, const char *path) {
 		fatal_errno("failed to create GBM device");
 	}
 
+	dev->atomic_req = drmModeAtomicAlloc();
+	if (!dev->atomic_req) {
+		fatal_errno("drmModeAtomicAlloc failed");
+	}
+
 	drmModeRes *res = drmModeGetResources(dev->fd);
 	if (!res) {
 		fatal("drmModeGetResources failed");
@@ -114,6 +119,7 @@ void device_finish(struct device *dev) {
 		connector_finish(&dev->connectors[i]);
 	}
 
+	drmModeAtomicFree(dev->atomic_req);
 	gbm_device_destroy(dev->gbm);
 	close(dev->fd);
 }
@@ -130,6 +136,32 @@ static struct crtc *device_find_crtc(struct device *dev, uint32_t crtc_id) {
 		}
 	}
 	return NULL;
+}
+
+static void connector_update(struct connector *conn, drmModeAtomicReq *req);
+static void crtc_update(struct crtc *crtc, drmModeAtomicReq *req);
+static void plane_update(struct plane *plane, drmModeAtomicReq *req);
+
+void device_commit(struct device *dev, uint32_t flags) {
+	int cursor = drmModeAtomicGetCursor(dev->atomic_req);
+
+	for (size_t i = 0; i < dev->connectors_len; ++i) {
+		connector_update(&dev->connectors[i], dev->atomic_req);
+	}
+
+	for (size_t i = 0; i < dev->crtcs_len; ++i) {
+		crtc_update(&dev->crtcs[i], dev->atomic_req);
+	}
+
+	for (size_t i = 0; i < dev->planes_len; ++i) {
+		plane_update(&dev->planes[i], dev->atomic_req);
+	}
+
+	if (drmModeAtomicCommit(dev->fd, dev->atomic_req, flags, NULL)) {
+		fatal_errno("atomic commit failed");
+	}
+
+	drmModeAtomicSetCursor(dev->atomic_req, cursor);
 }
 
 struct prop {
@@ -236,27 +268,16 @@ static void connector_init(struct connector *conn, struct device *dev,
 
 	conn->old_crtc = drmModeGetCrtc(dev->fd, crtc_id);
 
-	conn->atomic = drmModeAtomicAlloc();
-	if (!conn->atomic) {
-		fatal_errno("drmModeAtomicAlloc failed");
-	}
-
 	if (!connector_set_crtc(conn, device_find_crtc(dev, crtc_id))) {
 		fatal("failed to set CRTC for connector %"PRIu32, conn->id);
 	}
 	if (conn->crtc != NULL && conn->state == DRM_MODE_CONNECTED && has_mode) {
 		crtc_set_mode(conn->crtc, &mode);
 	}
-
-	// TODO: make the user responsible for this
-	connector_commit(conn,
-		DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK);
 }
 
 static void connector_finish(struct connector *conn) {
 	struct device *dev = conn->dev;
-
-	drmModeAtomicFree(conn->atomic);
 
 	drmModeCrtc *c = conn->old_crtc;
 	if (c != NULL) {
@@ -285,33 +306,6 @@ static void connector_update(struct connector *conn, drmModeAtomicReq *req) {
 	drmModeAtomicAddProperty(req, conn->id, conn->props.crtc_id, crtc_id);
 }
 
-static void crtc_update(struct crtc *crtc, drmModeAtomicReq *req);
-static void plane_update(struct plane *plane, drmModeAtomicReq *req);
-
-void connector_commit(struct connector *conn, uint32_t flags) {
-	struct device *dev = conn->dev;
-	int cursor = drmModeAtomicGetCursor(conn->atomic);
-
-	connector_update(conn, conn->atomic);
-
-	if (conn->crtc != NULL) {
-		crtc_update(conn->crtc, conn->atomic);
-
-		for (size_t i = 0; i < dev->planes_len; ++i) {
-			struct plane *plane = &dev->planes[i];
-			if (plane->crtc == conn->crtc) {
-				plane_update(plane, conn->atomic);
-			}
-		}
-	}
-
-	if (drmModeAtomicCommit(dev->fd, conn->atomic, flags, NULL)) {
-		fatal_errno("atomic commit failed");
-	}
-
-	drmModeAtomicSetCursor(conn->atomic, cursor);
-}
-
 static void crtc_init(struct crtc *crtc, struct device *dev, uint32_t crtc_id) {
 	crtc->dev = dev;
 	crtc->id = crtc_id;
@@ -331,8 +325,8 @@ static void crtc_finish(struct crtc *crtc) {
 }
 
 static void crtc_update(struct crtc *crtc, drmModeAtomicReq *req) {
-	drmModeAtomicAddProperty(req, crtc->id, crtc->props.active, 1);
 	drmModeAtomicAddProperty(req, crtc->id, crtc->props.mode_id, crtc->mode_id);
+	drmModeAtomicAddProperty(req, crtc->id, crtc->props.active, crtc->mode_id != 0);
 }
 
 void crtc_set_mode(struct crtc *crtc, drmModeModeInfo *mode) {
@@ -396,9 +390,9 @@ static void plane_init(struct plane *plane, struct device *dev,
 	read_obj_props(dev, plane_id, DRM_MODE_OBJECT_PLANE, plane_props,
 		sizeof(plane_props) / sizeof(plane_props[0]));
 
-	plane->crtc = device_find_crtc(dev, crtc_id);
-
 	printf("plane %"PRIu32" has type %"PRIu32"\n", plane_id, plane->type);
+
+	plane_set_crtc(plane, device_find_crtc(dev, crtc_id));
 }
 
 static void plane_finish(struct plane *plane) {
@@ -477,27 +471,30 @@ bool plane_set_crtc(struct plane *plane, struct crtc *crtc) {
 }
 
 static void plane_update(struct plane *plane, drmModeAtomicReq *req) {
-	uint32_t crtc_id = (plane->crtc != NULL) ? plane->crtc->id : 0;
+	uint32_t crtc_id = 0;
+	uint32_t fb_id = 0;
+	if (plane->crtc != NULL && plane->fb != NULL) {
+		crtc_id = plane->crtc->id;
+		fb_id = plane->fb->id;
+	}
 	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_id, crtc_id);
-
-	uint32_t fb_id = (plane->fb != NULL) ? plane->fb->id : 0;
 	drmModeAtomicAddProperty(req, plane->id, plane->props.fb_id, fb_id);
 
-	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_x, plane->x);
-	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_y, plane->y);
-	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_w, plane->width);
-	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_h, plane->height);
+	if (plane->crtc != NULL && plane->fb != NULL) {
+		drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_x, plane->x);
+		drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_y, plane->y);
+		drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_w, plane->width);
+		drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_h, plane->height);
 
-	if (plane->fb != NULL) {
 		// The src_* properties are in 16.16 fixed point
 		drmModeAtomicAddProperty(req, plane->id, plane->props.src_x, 0);
 		drmModeAtomicAddProperty(req, plane->id, plane->props.src_y, 0);
 		drmModeAtomicAddProperty(req, plane->id, plane->props.src_w, plane->fb->width << 16);
 		drmModeAtomicAddProperty(req, plane->id, plane->props.src_h, plane->fb->height << 16);
-	}
 
-	if (plane->props.alpha) {
-		drmModeAtomicAddProperty(req, plane->id, plane->props.alpha, plane->alpha * 0xFFFF);
+		if (plane->props.alpha) {
+			drmModeAtomicAddProperty(req, plane->id, plane->props.alpha, plane->alpha * 0xFFFF);
+		}
 	}
 }
 
