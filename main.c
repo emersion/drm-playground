@@ -55,6 +55,7 @@ int main(int argc, char *argv[]) {
 	};
 	const size_t colors_len = sizeof(colors) / sizeof(colors[0]);
 
+	int x = 0;
 	for (size_t i = 0; i < dev.planes_len; ++i) {
 		struct plane *plane = &dev.planes[i];
 		if (plane->crtc != conn->crtc) {
@@ -66,8 +67,11 @@ int main(int argc, char *argv[]) {
 			continue;
 		}
 
-		plane->x = i * 10;
-		plane->y = i * 20;
+		if (plane->type != DRM_PLANE_TYPE_PRIMARY) {
+			x += 10;
+			plane->x = x;
+			plane->y = 2 * x;
+		}
 		plane->alpha = 0.5;
 
 		const uint8_t *color = colors[i % colors_len];
