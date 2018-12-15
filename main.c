@@ -10,15 +10,20 @@
 #include <stdio.h>
 
 int main(int argc, char *argv[]) {
+	const char *device_path = "/dev/dri/card0";
+	if (argc == 2) {
+		device_path = argv[1];
+	}
+
 	struct device dev = { 0 };
-	device_init(&dev, "/dev/dri/card0");
+	device_init(&dev, device_path);
 
 	if (dev.connectors_len == 0) {
 		fatal("no connector");
 	}
 	struct connector *conn = &dev.connectors[0];
 	if (conn->state != DRM_MODE_CONNECTED || conn->crtc == NULL) {
-		fatal("conn-id %"PRIu32" not connected", conn->id);
+		fatal("connector %"PRIu32" not connected", conn->id);
 	}
 
 	device_commit(&dev,
