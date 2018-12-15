@@ -40,6 +40,11 @@ void device_init(struct device *dev, const char *path) {
 		fatal("DRM device must support universal planes");
 	}
 
+	uint64_t has_dumb;
+	if (drmGetCap(fd, DRM_CAP_DUMB_BUFFER, &has_dumb) < 0 || !has_dumb) {
+		fatal("DRM device must support dumb buffers");
+	}
+
 	dev->fd = fd;
 
 	dev->atomic_req = drmModeAtomicAlloc();
