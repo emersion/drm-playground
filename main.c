@@ -29,7 +29,7 @@ int main(int argc, char *argv[]) {
 	device_commit(&dev,
 		DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK);
 
-	struct dumb_framebuffer fbs[PLANES_CAP];
+	struct dumb_framebuffer fbs[dev.planes_len + 1];
 	size_t fbs_len = 0;
 
 	for (size_t i = 0; i < dev.planes_len; ++i) {

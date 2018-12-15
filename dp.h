@@ -8,10 +8,6 @@
 #include <drm_mode.h>
 #include <xf86drmMode.h>
 
-#define CONNECTORS_CAP 32
-#define CRTCS_CAP 32
-#define PLANES_CAP 64
-
 struct device;
 struct connector;
 
