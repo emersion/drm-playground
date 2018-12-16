@@ -35,6 +35,21 @@ static void pick_crtc(struct connector *conn) {
 	connector_set_crtc(conn, &dev->crtcs[best_crtc]);
 }
 
+// Pick the preferred mode
+static void pick_mode(struct connector *conn) {
+	if (conn->modes_len == 0) {
+		fatal("connector %"PRIu32" has no mode", conn->id);
+	}
+	drmModeModeInfo *mode = &conn->modes[0];
+	for (size_t i = 0; i < conn->modes_len; ++i) {
+		if (conn->modes[i].flags & DRM_MODE_TYPE_PREFERRED) {
+			mode = &conn->modes[i];
+			break;
+		}
+	}
+	crtc_set_mode(conn->crtc, mode);
+}
+
 int main(int argc, char *argv[]) {
 	const char *device_path = "/dev/dri/card0";
 	if (argc == 2) {
@@ -56,6 +71,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	pick_crtc(conn);
+	pick_mode(conn);
 
 	device_commit(&dev,
 		DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK);

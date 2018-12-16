@@ -75,6 +75,9 @@ struct connector {
 	drmModeConnection state;
 	uint32_t possible_crtcs;
 
+	drmModeModeInfo *modes;
+	size_t modes_len;
+
 	struct crtc *crtc; // can be NULL
 
 	struct {

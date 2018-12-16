@@ -243,11 +243,11 @@ static void connector_init(struct connector *conn, struct device *dev,
 
 	conn->state = drm_conn->connection;
 
-	// TODO: get current mode instead of forcing one
-	bool has_mode = (drm_conn->count_modes > 0);
-	drmModeModeInfo mode;
-	if (has_mode) {
-		mode = drm_conn->modes[0];
+	if (drm_conn->count_modes > 0) {
+		size_t modes_size = drm_conn->count_modes * sizeof(drmModeModeInfo);
+		conn->modes = xalloc(modes_size);
+		memcpy(conn->modes, drm_conn->modes, modes_size);
+		conn->modes_len = drm_conn->count_modes;
 	}
 
 	conn->possible_crtcs = (uint32_t)~0;
@@ -276,9 +276,6 @@ static void connector_init(struct connector *conn, struct device *dev,
 	if (!connector_set_crtc(conn, device_find_crtc(dev, crtc_id))) {
 		fatal("failed to set CRTC for connector %"PRIu32, conn->id);
 	}
-	if (conn->crtc != NULL && conn->state == DRM_MODE_CONNECTED && has_mode) {
-		crtc_set_mode(conn->crtc, &mode);
-	}
 }
 
 static void connector_finish(struct connector *conn) {
@@ -290,6 +287,8 @@ static void connector_finish(struct connector *conn) {
 			&conn->id, 1, &c->mode);
 		drmModeFreeCrtc(conn->old_crtc);
 	}
+
+	free(conn->modes);
 }
 
 bool connector_set_crtc(struct connector *conn, struct crtc *crtc) {
