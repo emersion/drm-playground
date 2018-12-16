@@ -522,6 +522,14 @@ void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,
 		fatal("DRM device doesn't support dumb frambuffers");
 	}
 
+	switch (fmt) {
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_ARGB8888:
+		break;
+	default:
+		fatal("format %"PRIu32" not supported");
+	}
+
 	struct drm_mode_create_dumb create = {
 		.width = width,
 		.height = height,
