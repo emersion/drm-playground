@@ -172,20 +172,26 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
+	bool to_right = false;
 	for (int i = 0; i < 60 * 5; ++i) {
 		device_commit(&dev, DRM_MODE_ATOMIC_NONBLOCK);
 
+		if (i % 60 == 0) {
+			to_right = !to_right;
+		}
+
+		int delta = to_right ? 1 : -1;
 		int x = 0;
-		for (size_t i = 0; i < dev.planes_len; ++i) {
-			struct plane *plane = &dev.planes[i];
+		for (size_t j = 0; j < dev.planes_len; ++j) {
+			struct plane *plane = &dev.planes[j];
 			if (plane->crtc != conn->crtc) {
 				continue;
 			}
 
 			if (plane->type != DRM_PLANE_TYPE_PRIMARY) {
-				x++;
+				x += delta;
 				plane->x += x;
-				plane->y++;
+				plane->y += delta;
 			}
 		}
 
