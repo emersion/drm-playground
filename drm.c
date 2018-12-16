@@ -401,7 +401,15 @@ static void plane_init(struct plane *plane, struct device *dev,
 	if (!drm_plane) {
 		fatal("drmModeGetPlane failed");
 	}
+
 	plane->possible_crtcs = drm_plane->possible_crtcs;
+
+	// We could use IN_FORMATS instead here, but it's not yet widely supported
+	plane->linear_formats_len = drm_plane->count_formats;
+	size_t formats_size = plane->linear_formats_len * sizeof(uint32_t);
+	plane->linear_formats = xalloc(formats_size);
+	memcpy(plane->linear_formats, drm_plane->formats, formats_size);
+
 	drmModeFreePlane(drm_plane);
 
 	plane->alpha = 1.0;
@@ -431,31 +439,7 @@ static void plane_init(struct plane *plane, struct device *dev,
 }
 
 static void plane_finish(struct plane *plane) {
-	// No-op
-}
-
-uint32_t plane_dumb_format(struct plane *plane) {
-	uint32_t fb_fmt = DRM_FORMAT_INVALID;
-
-	// We could use IN_FORMATS instead here, but it's not yet widely supported
-	drmModePlane *drm_plane = drmModeGetPlane(plane->dev->fd, plane->id);
-	if (!plane) {
-		fatal("drmModeGetPlane failed");
-	}
-
-	for (uint32_t i = 0; i < drm_plane->count_formats; ++i) {
-		uint32_t fmt = drm_plane->formats[i];
-		switch (fmt) {
-		case DRM_FORMAT_XRGB8888:
-		case DRM_FORMAT_ARGB8888:
-			fb_fmt = fmt;
-			break;
-		}
-	}
-
-	drmModeFreePlane(drm_plane);
-
-	return fb_fmt;
+	free(plane->linear_formats);
 }
 
 void plane_set_framebuffer(struct plane *plane, struct framebuffer *fb) {

@@ -33,6 +33,9 @@ struct plane {
 	uint32_t type;
 	uint32_t possible_crtcs;
 
+	uint32_t *linear_formats;
+	size_t linear_formats_len;
+
 	struct crtc *crtc; // can be NULL
 	struct framebuffer *fb; // can be NULL
 	uint32_t x, y;
@@ -109,7 +112,6 @@ bool connector_set_crtc(struct connector *conn, struct crtc *crtc);
 
 void crtc_set_mode(struct crtc *crtc, const drmModeModeInfo *mode);
 
-uint32_t plane_dumb_format(struct plane *plane);
 void plane_set_framebuffer(struct plane *plane, struct framebuffer *fb);
 bool plane_set_crtc(struct plane *plane, struct crtc *crtc);
 

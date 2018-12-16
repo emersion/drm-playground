@@ -50,6 +50,24 @@ static void pick_mode(struct connector *conn) {
 	crtc_set_mode(conn->crtc, mode);
 }
 
+static uint32_t pick_rgb_format(struct plane *plane) {
+	uint32_t fb_fmt = DRM_FORMAT_INVALID;
+
+	for (uint32_t i = 0; i < plane->linear_formats_len; ++i) {
+		uint32_t fmt = plane->linear_formats[i];
+		switch (fmt) {
+		case DRM_FORMAT_XRGB8888:
+			fb_fmt = fmt;
+			break;
+		case DRM_FORMAT_ARGB8888:
+			// Prefer formats with an alpha channel
+			return fmt;
+		}
+	}
+
+	return fb_fmt;
+}
+
 int main(int argc, char *argv[]) {
 	const char *device_path = "/dev/dri/card0";
 	if (argc == 2) {
@@ -86,7 +104,7 @@ int main(int argc, char *argv[]) {
 			continue;
 		}
 
-		uint32_t fb_fmt = plane_dumb_format(plane);
+		uint32_t fb_fmt = pick_rgb_format(plane);
 		if (fb_fmt == DRM_FORMAT_INVALID) {
 			continue;
 		}
