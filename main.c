@@ -172,10 +172,24 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	device_commit(&dev, DRM_MODE_ATOMIC_NONBLOCK);
-
 	for (int i = 0; i < 60 * 5; ++i) {
-		struct timespec ts = { .tv_nsec = 16666667 };
+		device_commit(&dev, DRM_MODE_ATOMIC_NONBLOCK);
+
+		int x = 0;
+		for (size_t i = 0; i < dev.planes_len; ++i) {
+			struct plane *plane = &dev.planes[i];
+			if (plane->crtc != conn->crtc) {
+				continue;
+			}
+
+			if (plane->type != DRM_PLANE_TYPE_PRIMARY) {
+				x++;
+				plane->x += x;
+				plane->y++;
+			}
+		}
+
+		struct timespec ts = { .tv_nsec = 16666667 }; // 60 FPS
 		nanosleep(&ts, NULL);
 	}
 
