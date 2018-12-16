@@ -314,21 +314,37 @@ static void crtc_init(struct crtc *crtc, struct device *dev, uint32_t crtc_id) {
 	crtc->dev = dev;
 	crtc->id = crtc_id;
 
-	// TODO: read current mode
-	uint32_t active;
+	uint32_t active, mode_id;
 	struct prop crtc_props[] = {
 		{ "ACTIVE", &crtc->props.active, &active, true },
-		{ "MODE_ID", &crtc->props.mode_id, NULL, true },
+		{ "MODE_ID", &crtc->props.mode_id, &mode_id, true },
 	};
 	read_obj_props(dev, crtc_id, DRM_MODE_OBJECT_CRTC, crtc_props,
 		sizeof(crtc_props) / sizeof(crtc_props[0]));
 
 	crtc->active = active;
+	crtc->mode_id = mode_id;
+
+	if (mode_id != 0) {
+		drmModePropertyBlobRes *blob = drmModeGetPropertyBlob(dev->fd, mode_id);
+		if (blob == NULL) {
+			fatal_errno("failed to get MODE_ID blob");
+		}
+		drmModeModeInfo *mode = blob->data;
+		crtc->mode = xalloc(sizeof(drmModeModeInfo));
+		memcpy(crtc->mode, mode, sizeof(drmModeModeInfo));
+		drmModeFreePropertyBlob(blob);
+	}
 }
 
 static void crtc_finish(struct crtc *crtc) {
 	struct device *dev = crtc->dev;
-	drmModeDestroyPropertyBlob(dev->fd, crtc->mode_id);
+
+	if (crtc->mode_id != 0) {
+		drmModeDestroyPropertyBlob(dev->fd, crtc->mode_id);
+	}
+
+	free(crtc->mode);
 }
 
 static void crtc_update(struct crtc *crtc, drmModeAtomicReq *req) {
@@ -337,13 +353,20 @@ static void crtc_update(struct crtc *crtc, drmModeAtomicReq *req) {
 		crtc->mode_id != 0 && crtc->active);
 }
 
-void crtc_set_mode(struct crtc *crtc, drmModeModeInfo *mode) {
+void crtc_set_mode(struct crtc *crtc, const drmModeModeInfo *mode) {
 	struct device *dev = crtc->dev;
+
+	if ((crtc->mode != NULL && memcmp(crtc->mode, mode, sizeof(*mode)) == 0) ||
+			(crtc->mode == NULL && mode == NULL)) {
+		return;
+	}
 
 	if (crtc->mode_id != 0) {
 		drmModeDestroyPropertyBlob(dev->fd, crtc->mode_id);
 		crtc->mode_id = 0;
-		crtc->width = crtc->height = 0;
+
+		free(crtc->mode);
+		crtc->mode = NULL;
 	}
 
 	if (mode == NULL) {
@@ -356,11 +379,11 @@ void crtc_set_mode(struct crtc *crtc, drmModeModeInfo *mode) {
 		fatal_errno("failed to create DRM property blob for mode");
 	}
 
-	crtc->width = mode->hdisplay;
-	crtc->height = mode->vdisplay;
+	crtc->mode = xalloc(sizeof(*crtc->mode));
+	memcpy(crtc->mode, mode, sizeof(*crtc->mode));
 
 	printf("assigning mode %"PRIu32"x%"PRIu32" to CRTC %"PRIu32"\n",
-		crtc->width, crtc->height, crtc->id);
+		mode->hdisplay, mode->vdisplay, crtc->id);
 }
 
 static void plane_init(struct plane *plane, struct device *dev,
@@ -441,6 +464,10 @@ bool plane_set_crtc(struct plane *plane, struct crtc *crtc) {
 		if ((plane->possible_crtcs & (1 << crtc_idx)) == 0) {
 			return false;
 		}
+
+		if (crtc->mode == NULL) {
+			return false;
+		}
 	}
 
 	plane->crtc = crtc;
@@ -456,8 +483,8 @@ bool plane_set_crtc(struct plane *plane, struct crtc *crtc) {
 		plane->width = plane->height = 100;
 		break;
 	case DRM_PLANE_TYPE_PRIMARY:
-		plane->width = crtc->width;
-		plane->height = crtc->height;
+		plane->width = crtc->mode->hdisplay;
+		plane->height = crtc->mode->vdisplay;
 		break;
 	case DRM_PLANE_TYPE_CURSOR:;
 		// Some drivers *require* the FB to have exactly this size

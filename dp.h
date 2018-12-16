@@ -59,8 +59,8 @@ struct crtc {
 	struct device *dev;
 	uint32_t id;
 
+	drmModeModeInfo *mode;
 	uint32_t mode_id;
-	uint32_t width, height;
 	bool active;
 
 	struct {
@@ -107,7 +107,7 @@ void device_commit(struct device *dev, uint32_t flags);
 
 bool connector_set_crtc(struct connector *conn, struct crtc *crtc);
 
-void crtc_set_mode(struct crtc *crtc, drmModeModeInfo *mode);
+void crtc_set_mode(struct crtc *crtc, const drmModeModeInfo *mode);
 
 uint32_t plane_dumb_format(struct plane *plane);
 void plane_set_framebuffer(struct plane *plane, struct framebuffer *fb);
