@@ -33,25 +33,28 @@ void device_init(struct device *dev, const char *path) {
 		fatal_errno("failed to open \"%s\"", path);
 	}
 
-	if (drmSetClientCap(dev->fd, DRM_CLIENT_CAP_ATOMIC, 1)) {
+	if (drmSetClientCap(dev->fd, DRM_CLIENT_CAP_ATOMIC, 1) != 0) {
 		fatal("DRM device must support atomic modesetting");
 	}
-	if (drmSetClientCap(dev->fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1)) {
+	if (drmSetClientCap(dev->fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) != 0) {
 		fatal("DRM device must support universal planes");
 	}
 
 	uint64_t has_dumb;
-	if (drmGetCap(dev->fd, DRM_CAP_DUMB_BUFFER, &has_dumb) < 0) {
+	if (drmGetCap(dev->fd, DRM_CAP_DUMB_BUFFER, &has_dumb) != 0) {
 		fatal("drmGetCap(DRM_CAP_DUMB_BUFFER) failed");
 	}
 	dev->caps.dumb = has_dumb;
 
-	if (drmGetCap(dev->fd, DRM_CAP_CURSOR_WIDTH, &dev->caps.cursor_width) != 0) {
+	uint64_t cursor_width, cursor_height;
+	if (drmGetCap(dev->fd, DRM_CAP_CURSOR_WIDTH, &cursor_width) != 0) {
 		fatal("drmGetCap(DRM_CAP_CURSOR_WIDTH) failed");
 	}
-	if (drmGetCap(dev->fd, DRM_CAP_CURSOR_HEIGHT, &dev->caps.cursor_height) != 0) {
+	if (drmGetCap(dev->fd, DRM_CAP_CURSOR_HEIGHT, &cursor_height) != 0) {
 		fatal("drmGetCap(DRM_CAP_CURSOR_HEIGHT) failed");
 	}
+	dev->caps.cursor_width = cursor_width;
+	dev->caps.cursor_height = cursor_height;
 
 	dev->atomic_req = drmModeAtomicAlloc();
 	if (!dev->atomic_req) {
@@ -278,10 +281,7 @@ static void connector_init(struct connector *conn, struct device *dev,
 	drmModeFreeConnector(drm_conn);
 
 	conn->old_crtc = drmModeGetCrtc(dev->fd, crtc_id);
-
-	if (!connector_set_crtc(conn, device_find_crtc(dev, crtc_id))) {
-		fatal("failed to set CRTC for connector %"PRIu32, conn->id);
-	}
+	conn->crtc = device_find_crtc(dev, crtc_id);
 }
 
 static void connector_finish(struct connector *conn) {
@@ -439,9 +439,9 @@ static void plane_init(struct plane *plane, struct device *dev,
 	read_obj_props(dev, plane_id, DRM_MODE_OBJECT_PLANE, plane_props,
 		sizeof(plane_props) / sizeof(plane_props[0]));
 
-	printf("plane %"PRIu32" has type %"PRIu32"\n", plane_id, plane->type);
+	plane->crtc = device_find_crtc(dev, crtc_id);
 
-	plane_set_crtc(plane, device_find_crtc(dev, crtc_id));
+	printf("plane %"PRIu32" has type %"PRIu32"\n", plane_id, plane->type);
 }
 
 static void plane_finish(struct plane *plane) {

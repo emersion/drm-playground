@@ -96,7 +96,7 @@ struct device {
 
 	struct {
 		bool dumb;
-		uint64_t cursor_width, cursor_height;
+		uint32_t cursor_width, cursor_height;
 	} caps;
 
 	size_t connectors_len;
