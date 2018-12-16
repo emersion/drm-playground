@@ -100,12 +100,27 @@ int main(int argc, char *argv[]) {
 	for (size_t i = 0; i < dev.planes_len; ++i) {
 		struct plane *plane = &dev.planes[i];
 
-		if (!plane_set_crtc(plane, conn->crtc)) {
-			continue;
+		switch (plane->type) {
+		case DRM_PLANE_TYPE_OVERLAY:
+			plane->width = plane->height = 100;
+			break;
+		case DRM_PLANE_TYPE_PRIMARY:
+			plane->width = conn->crtc->mode->hdisplay;
+			plane->height = conn->crtc->mode->vdisplay;
+			break;
+		case DRM_PLANE_TYPE_CURSOR:
+			// Some drivers *require* the FB to have exactly this size
+			plane->width = dev.caps.cursor_width;
+			plane->height = dev.caps.cursor_height;
+			break;
 		}
 
 		uint32_t fb_fmt = pick_rgb_format(plane);
 		if (fb_fmt == DRM_FORMAT_INVALID) {
+			continue;
+		}
+
+		if (!plane_set_crtc(plane, conn->crtc)) {
 			continue;
 		}
 

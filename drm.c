@@ -28,24 +28,30 @@ static void plane_init(struct plane *plane, struct device *dev,
 void device_init(struct device *dev, const char *path) {
 	printf("opening device \"%s\"\n", path);
 
-	int fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
-	if (fd < 0) {
+	dev->fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+	if (dev->fd < 0) {
 		fatal_errno("failed to open \"%s\"", path);
 	}
 
-	if (drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1)) {
+	if (drmSetClientCap(dev->fd, DRM_CLIENT_CAP_ATOMIC, 1)) {
 		fatal("DRM device must support atomic modesetting");
 	}
-	if (drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1)) {
+	if (drmSetClientCap(dev->fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1)) {
 		fatal("DRM device must support universal planes");
 	}
 
 	uint64_t has_dumb;
-	if (drmGetCap(fd, DRM_CAP_DUMB_BUFFER, &has_dumb) < 0 || !has_dumb) {
-		fatal("DRM device must support dumb buffers");
+	if (drmGetCap(dev->fd, DRM_CAP_DUMB_BUFFER, &has_dumb) < 0) {
+		fatal("drmGetCap(DRM_CAP_DUMB_BUFFER) failed");
 	}
+	dev->caps.dumb = has_dumb;
 
-	dev->fd = fd;
+	if (drmGetCap(dev->fd, DRM_CAP_CURSOR_WIDTH, &dev->caps.cursor_width) != 0) {
+		fatal("drmGetCap(DRM_CAP_CURSOR_WIDTH) failed");
+	}
+	if (drmGetCap(dev->fd, DRM_CAP_CURSOR_HEIGHT, &dev->caps.cursor_height) != 0) {
+		fatal("drmGetCap(DRM_CAP_CURSOR_HEIGHT) failed");
+	}
 
 	dev->atomic_req = drmModeAtomicAlloc();
 	if (!dev->atomic_req) {
@@ -60,7 +66,7 @@ void device_init(struct device *dev, const char *path) {
 	size_t encoders_len = res->count_encoders;
 	struct encoder *encoders = xalloc(encoders_len * sizeof(struct encoder));
 	for (int i = 0; i < res->count_encoders; ++i) {
-		drmModeEncoder *enc = drmModeGetEncoder(fd, res->encoders[i]);
+		drmModeEncoder *enc = drmModeGetEncoder(dev->fd, res->encoders[i]);
 		if (enc == NULL) {
 			fatal("drmModeGetEncoder failed");
 		}
@@ -463,40 +469,13 @@ bool plane_set_crtc(struct plane *plane, struct crtc *crtc) {
 		if ((plane->possible_crtcs & (1 << crtc_idx)) == 0) {
 			return false;
 		}
-
-		if (crtc->mode == NULL) {
-			return false;
-		}
 	}
 
 	plane->crtc = crtc;
 
 	if (crtc == NULL) {
-		plane->width = plane->height = 0;
 		printf("assigning NULL CRTC to plane %"PRIu32"\n", plane->id);
 		return true;
-	}
-
-	switch (plane->type) {
-	case DRM_PLANE_TYPE_OVERLAY:
-		plane->width = plane->height = 100;
-		break;
-	case DRM_PLANE_TYPE_PRIMARY:
-		plane->width = crtc->mode->hdisplay;
-		plane->height = crtc->mode->vdisplay;
-		break;
-	case DRM_PLANE_TYPE_CURSOR:;
-		// Some drivers *require* the FB to have exactly this size
-		uint64_t width, height;
-		if (drmGetCap(plane->dev->fd, DRM_CAP_CURSOR_WIDTH, &width) != 0) {
-			fatal("drmGetCap(DRM_CAP_CURSOR_WIDTH) failed");
-		}
-		if (drmGetCap(plane->dev->fd, DRM_CAP_CURSOR_HEIGHT, &height) != 0) {
-			fatal("drmGetCap(DRM_CAP_CURSOR_HEIGHT) failed");
-		}
-		plane->width = width;
-		plane->height = height;
-		break;
 	}
 
 	printf("assigning CRTC %"PRIu32" to plane %"PRIu32"\n",
@@ -538,6 +517,10 @@ void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,
 
 	printf("initializing dumb framebuffer with format %"PRIu32" and "
 		"size %"PRIu32"x%"PRIu32"\n", fmt, width, height);
+
+	if (!dev->caps.dumb) {
+		fatal("DRM device doesn't support dumb frambuffers");
+	}
 
 	struct drm_mode_create_dumb create = {
 		.width = width,

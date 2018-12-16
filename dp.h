@@ -94,6 +94,11 @@ struct device {
 	int fd;
 	drmModeAtomicReq *atomic_req;
 
+	struct {
+		bool dumb;
+		uint64_t cursor_width, cursor_height;
+	} caps;
+
 	size_t connectors_len;
 	struct connector *connectors;
 
