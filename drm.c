@@ -292,6 +292,10 @@ static void connector_finish(struct connector *conn) {
 }
 
 bool connector_set_crtc(struct connector *conn, struct crtc *crtc) {
+	if (conn->crtc == crtc) {
+		return true;
+	}
+
 	if (crtc != NULL) {
 		size_t crtc_idx = crtc - conn->dev->crtcs;
 		if ((conn->possible_crtcs & (1 << crtc_idx)) == 0) {
@@ -455,10 +459,21 @@ uint32_t plane_dumb_format(struct plane *plane) {
 }
 
 void plane_set_framebuffer(struct plane *plane, struct framebuffer *fb) {
+	if (plane->fb == fb) {
+		return;
+	}
+
 	plane->fb = fb;
+
+	printf("assigning framebuffer %"PRIu32" to plane %"PRIu32"\n",
+		fb->id, plane->id);
 }
 
 bool plane_set_crtc(struct plane *plane, struct crtc *crtc) {
+	if (plane->crtc == crtc) {
+		return true;
+	}
+
 	if (crtc != NULL) {
 		size_t crtc_idx = crtc - plane->dev->crtcs;
 		if ((plane->possible_crtcs & (1 << crtc_idx)) == 0) {
