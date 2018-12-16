@@ -9,6 +9,32 @@
 
 #include <stdio.h>
 
+// Pick the CRTC with the maximum number of planes
+static void pick_crtc(struct connector *conn) {
+	struct device *dev = conn->dev;
+
+	size_t planes_per_crtc[dev->crtcs_len + 1];
+	memset(planes_per_crtc, 0, sizeof(planes_per_crtc));
+
+	size_t best_crtc = 0;
+	for (size_t i = 0; i < dev->planes_len; ++i) {
+		struct plane *plane = &dev->planes[i];
+		for (size_t j = 0; j < dev->crtcs_len; ++j) {
+			if ((conn->possible_crtcs & (1 << j)) == 0) {
+				continue;
+			}
+			if (plane->possible_crtcs & (1 << j)) {
+				++planes_per_crtc[j];
+				if (planes_per_crtc[j] > planes_per_crtc[best_crtc]) {
+					best_crtc = j;
+				}
+			}
+		}
+	}
+
+	connector_set_crtc(conn, &dev->crtcs[best_crtc]);
+}
+
 int main(int argc, char *argv[]) {
 	const char *device_path = "/dev/dri/card0";
 	if (argc == 2) {
@@ -21,10 +47,15 @@ int main(int argc, char *argv[]) {
 	if (dev.connectors_len == 0) {
 		fatal("no connector");
 	}
+	if (dev.crtcs_len == 0) {
+		fatal("no CRTC");
+	}
 	struct connector *conn = &dev.connectors[0];
-	if (conn->state != DRM_MODE_CONNECTED || conn->crtc == NULL) {
+	if (conn->state != DRM_MODE_CONNECTED) {
 		fatal("connector %"PRIu32" not connected", conn->id);
 	}
+
+	pick_crtc(conn);
 
 	device_commit(&dev,
 		DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK);
