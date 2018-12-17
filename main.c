@@ -173,6 +173,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		if (!plane_set_crtc(plane, conn->crtc)) {
+			plane_set_crtc(plane, NULL);
 			continue;
 		}
 
