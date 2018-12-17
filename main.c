@@ -140,6 +140,10 @@ int main(int argc, char *argv[]) {
 	pick_crtc(conn);
 	pick_mode(conn);
 
+	for (size_t i = 0; i < dev.crtcs_len; ++i) {
+		dev.crtcs[i].active = (conn->crtc == &dev.crtcs[i]);
+	}
+
 	device_commit(&dev, DRM_MODE_ATOMIC_ALLOW_MODESET);
 
 	struct dumb_framebuffer fbs[dev.planes_len + 1];
