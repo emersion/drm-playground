@@ -152,23 +152,23 @@ static struct crtc *device_find_crtc(struct device *dev, uint32_t crtc_id) {
 	return NULL;
 }
 
-static void connector_update(struct connector *conn, drmModeAtomicReq *req);
-static void crtc_update(struct crtc *crtc, drmModeAtomicReq *req);
-static void plane_update(struct plane *plane, drmModeAtomicReq *req);
+static void connector_push(struct connector *conn, drmModeAtomicReq *req);
+static void crtc_push(struct crtc *crtc, drmModeAtomicReq *req);
+static void plane_push(struct plane *plane, drmModeAtomicReq *req);
 
 void device_commit(struct device *dev, uint32_t flags) {
 	int cursor = drmModeAtomicGetCursor(dev->atomic_req);
 
 	for (size_t i = 0; i < dev->connectors_len; ++i) {
-		connector_update(&dev->connectors[i], dev->atomic_req);
+		connector_push(&dev->connectors[i], dev->atomic_req);
 	}
 
 	for (size_t i = 0; i < dev->crtcs_len; ++i) {
-		crtc_update(&dev->crtcs[i], dev->atomic_req);
+		crtc_push(&dev->crtcs[i], dev->atomic_req);
 	}
 
 	for (size_t i = 0; i < dev->planes_len; ++i) {
-		plane_update(&dev->planes[i], dev->atomic_req);
+		plane_push(&dev->planes[i], dev->atomic_req);
 	}
 
 	if (drmModeAtomicCommit(dev->fd, dev->atomic_req, flags, NULL)) {
@@ -178,22 +178,24 @@ void device_commit(struct device *dev, uint32_t flags) {
 	drmModeAtomicSetCursor(dev->atomic_req, cursor);
 }
 
-struct prop {
+struct prop_init {
 	const char *name;
-	uint32_t *dest;
-	uint32_t *value;
+	uint32_t *id;
 	bool required;
 };
 
-static int prop_cmp(const void *arg1, const void *arg2) {
-	const char *key = arg1;
-	const struct prop *val = arg2;
-
-	return strcmp(key, val->name);
+static struct prop_init *find_prop_init(struct prop_init *props,
+		size_t props_len, const char *name) {
+	for (size_t i = 0; i < props_len; ++i) {
+		if (strcmp(props[i].name, name) == 0) {
+			return &props[i];
+		}
+	}
+	return NULL;
 }
 
-void read_obj_props(struct device *dev, uint32_t obj_id, uint32_t obj_type,
-		struct prop *props, size_t props_len) {
+static void init_obj_props(struct device *dev, uint32_t obj_id,
+		uint32_t obj_type, struct prop_init *props, size_t props_len) {
 	drmModeObjectProperties *obj_props =
 		drmModeObjectGetProperties(dev->fd, obj_id, obj_type);
 	if (!obj_props) {
@@ -209,14 +211,10 @@ void read_obj_props(struct device *dev, uint32_t obj_id, uint32_t obj_type,
 			fatal_errno("drmModeGetProperty failed");
 		}
 
-		struct prop *p = bsearch(prop->name, props, props_len,
-			sizeof(*props), prop_cmp);
-		if (p) {
+		struct prop_init *p = find_prop_init(props, props_len, prop->name);
+		if (p != NULL) {
 			seen[p - props] = true;
-			*p->dest = prop->prop_id;
-			if (p->value) {
-				*p->value = obj_props->prop_values[i];
-			}
+			*p->id = prop->prop_id;
 		}
 
 		drmModeFreeProperty(prop);
@@ -231,6 +229,42 @@ void read_obj_props(struct device *dev, uint32_t obj_id, uint32_t obj_type,
 	drmModeFreeObjectProperties(obj_props);
 }
 
+struct prop_pull {
+	uint32_t id;
+	uint64_t *value;
+};
+
+static struct prop_pull *find_prop_pull(struct prop_pull *props,
+		size_t props_len, uint32_t id) {
+	for (size_t i = 0; i < props_len; ++i) {
+		if (props[i].id == id) {
+			return &props[i];
+		}
+	}
+	return NULL;
+}
+
+static void pull_obj_props(struct device *dev, uint32_t obj_id,
+		uint32_t obj_type, struct prop_pull *props, size_t props_len) {
+	drmModeObjectProperties *obj_props =
+		drmModeObjectGetProperties(dev->fd, obj_id, obj_type);
+	if (!obj_props) {
+		fatal_errno("drmModeObjectGetProperties failed");
+	}
+
+	for (uint32_t i = 0; i < obj_props->count_props; ++i) {
+		struct prop_pull *p =
+			find_prop_pull(props, props_len, obj_props->props[i]);
+		if (p != NULL) {
+			*p->value = obj_props->prop_values[i];
+		}
+	}
+
+	drmModeFreeObjectProperties(obj_props);
+}
+
+static void connector_pull(struct connector *conn);
+
 static void connector_init(struct connector *conn, struct device *dev,
 		uint32_t conn_id, struct encoder *encoders, size_t encoders_len) {
 	printf("initializing connector %"PRIu32"\n", conn_id);
@@ -238,25 +272,15 @@ static void connector_init(struct connector *conn, struct device *dev,
 	conn->dev = dev;
 	conn->id = conn_id;
 
-	uint32_t crtc_id = 0;
-	struct prop conn_props[] = {
-		{ "CRTC_ID", &conn->props.crtc_id, &crtc_id, true },
+	struct prop_init props[] = {
+		{ "CRTC_ID", &conn->props.crtc_id, true },
 	};
-	read_obj_props(dev, conn_id, DRM_MODE_OBJECT_CONNECTOR, conn_props,
-		sizeof(conn_props) / sizeof(conn_props[0]));
+	init_obj_props(conn->dev, conn->id, DRM_MODE_OBJECT_CONNECTOR, props,
+		sizeof(props) / sizeof(props[0]));
 
-	drmModeConnector *drm_conn = drmModeGetConnector(dev->fd, conn_id);
+	drmModeConnector *drm_conn = drmModeGetConnector(conn->dev->fd, conn->id);
 	if (!drm_conn) {
-		fatal_errno("failed to get connector %"PRIu32, conn_id);
-	}
-
-	conn->state = drm_conn->connection;
-
-	if (drm_conn->count_modes > 0) {
-		size_t modes_size = drm_conn->count_modes * sizeof(drmModeModeInfo);
-		conn->modes = xalloc(modes_size);
-		memcpy(conn->modes, drm_conn->modes, modes_size);
-		conn->modes_len = drm_conn->count_modes;
+		fatal_errno("failed to get connector %"PRIu32, conn->id);
 	}
 
 	conn->possible_crtcs = (uint32_t)~0;
@@ -280,8 +304,9 @@ static void connector_init(struct connector *conn, struct device *dev,
 
 	drmModeFreeConnector(drm_conn);
 
-	conn->old_crtc = drmModeGetCrtc(dev->fd, crtc_id);
-	conn->crtc = device_find_crtc(dev, crtc_id);
+	connector_pull(conn);
+	conn->old_crtc = drmModeGetCrtc(dev->fd,
+		conn->current.crtc ? conn->current.crtc->id : 0);
 }
 
 static void connector_finish(struct connector *conn) {
@@ -297,8 +322,45 @@ static void connector_finish(struct connector *conn) {
 	free(conn->modes);
 }
 
+static void connector_pull(struct connector *conn) {
+	drmModeConnector *drm_conn = drmModeGetConnector(conn->dev->fd, conn->id);
+	if (!drm_conn) {
+		fatal_errno("failed to get connector %"PRIu32, conn->id);
+	}
+
+	conn->state = drm_conn->connection;
+
+	if (drm_conn->count_modes > 0) {
+		size_t modes_size = drm_conn->count_modes * sizeof(drmModeModeInfo);
+		free(conn->modes);
+		conn->modes = xalloc(modes_size);
+		memcpy(conn->modes, drm_conn->modes, modes_size);
+		conn->modes_len = drm_conn->count_modes;
+	}
+
+	drmModeFreeConnector(drm_conn);
+
+	uint64_t crtc_id = 0;
+	struct prop_pull props[] = {
+		{ conn->props.crtc_id, &crtc_id },
+	};
+	pull_obj_props(conn->dev, conn->id, DRM_MODE_OBJECT_CONNECTOR, props,
+		sizeof(props) / sizeof(props[0]));
+
+	conn->current.crtc = device_find_crtc(conn->dev, crtc_id);
+}
+
+static void connector_push(struct connector *conn, drmModeAtomicReq *req) {
+	struct connector_state *state = &conn->pending;
+
+	uint32_t crtc_id = (state->crtc != NULL) ? state->crtc->id : 0;
+	drmModeAtomicAddProperty(req, conn->id, conn->props.crtc_id, crtc_id);
+
+	memcpy(&conn->current, &conn->pending, sizeof(struct connector_state));
+}
+
 bool connector_set_crtc(struct connector *conn, struct crtc *crtc) {
-	if (conn->crtc == crtc) {
+	if (conn->pending.crtc == crtc) {
 		return true;
 	}
 
@@ -311,40 +373,24 @@ bool connector_set_crtc(struct connector *conn, struct crtc *crtc) {
 
 	printf("assigning CRTC %"PRIu32" to connector %"PRIu32"\n",
 		crtc ? crtc->id : 0, conn->id);
-	conn->crtc = crtc;
+	conn->pending.crtc = crtc;
 	return true;
 }
 
-static void connector_update(struct connector *conn, drmModeAtomicReq *req) {
-	uint32_t crtc_id = (conn->crtc != NULL) ? conn->crtc->id : 0;
-	drmModeAtomicAddProperty(req, conn->id, conn->props.crtc_id, crtc_id);
-}
+static void crtc_pull(struct crtc *crtc);
 
 static void crtc_init(struct crtc *crtc, struct device *dev, uint32_t crtc_id) {
 	crtc->dev = dev;
 	crtc->id = crtc_id;
 
-	uint32_t active, mode_id;
-	struct prop crtc_props[] = {
-		{ "ACTIVE", &crtc->props.active, &active, true },
-		{ "MODE_ID", &crtc->props.mode_id, &mode_id, true },
+	struct prop_init props[] = {
+		{ "ACTIVE", &crtc->props.active, true },
+		{ "MODE_ID", &crtc->props.mode_id, true },
 	};
-	read_obj_props(dev, crtc_id, DRM_MODE_OBJECT_CRTC, crtc_props,
-		sizeof(crtc_props) / sizeof(crtc_props[0]));
+	init_obj_props(crtc->dev, crtc->id, DRM_MODE_OBJECT_CRTC, props,
+		sizeof(props) / sizeof(props[0]));
 
-	crtc->active = active;
-	crtc->mode_id = mode_id;
-
-	if (mode_id != 0) {
-		drmModePropertyBlobRes *blob = drmModeGetPropertyBlob(dev->fd, mode_id);
-		if (blob == NULL) {
-			fatal_errno("failed to get MODE_ID blob");
-		}
-		drmModeModeInfo *mode = blob->data;
-		crtc->mode = xalloc(sizeof(drmModeModeInfo));
-		memcpy(crtc->mode, mode, sizeof(drmModeModeInfo));
-		drmModeFreePropertyBlob(blob);
-	}
+	crtc_pull(crtc);
 }
 
 static void crtc_finish(struct crtc *crtc) {
@@ -354,32 +400,97 @@ static void crtc_finish(struct crtc *crtc) {
 		drmModeDestroyPropertyBlob(dev->fd, crtc->mode_id);
 	}
 
-	free(crtc->mode);
+	free(crtc->current.mode);
+	free(crtc->pending.mode);
 }
 
-static void crtc_update(struct crtc *crtc, drmModeAtomicReq *req) {
+static void crtc_state_set_mode(struct crtc_state *state,
+		const drmModeModeInfo *mode) {
+	free(state->mode);
+	state->mode = NULL;
+
+	if (mode != NULL) {
+		state->mode = xalloc(sizeof(drmModeModeInfo));
+		memcpy(state->mode, mode, sizeof(drmModeModeInfo));
+	}
+}
+
+static bool compare_modes(const drmModeModeInfo *a, const drmModeModeInfo *b) {
+	if (a == NULL && b == NULL) {
+		return true;
+	}
+	if (a == NULL || b == NULL) {
+		return false;
+	}
+	return memcmp(a, b, sizeof(drmModeModeInfo)) == 0;
+}
+
+static void crtc_pull(struct crtc *crtc) {
+	uint64_t active, mode_id;
+	struct prop_pull props[] = {
+		{ crtc->props.active, &active },
+		{ crtc->props.mode_id, &mode_id },
+	};
+	pull_obj_props(crtc->dev, crtc->id, DRM_MODE_OBJECT_CRTC, props,
+		sizeof(props) / sizeof(props[0]));
+
+	crtc->current.active = !!active;
+
+	crtc->mode_id = mode_id;
+	if (mode_id != 0) {
+		drmModePropertyBlobRes *blob =
+			drmModeGetPropertyBlob(crtc->dev->fd, mode_id);
+		if (blob == NULL) {
+			fatal_errno("failed to get MODE_ID blob");
+		}
+		drmModeModeInfo *mode = blob->data;
+		crtc_state_set_mode(&crtc->current, mode);
+		drmModeFreePropertyBlob(blob);
+	}
+}
+
+static void crtc_push(struct crtc *crtc, drmModeAtomicReq *req) {
+	struct crtc_state *state = &crtc->pending;
+
+	// Create a new blob for the mode if it has changed
+	if (!compare_modes(state->mode, crtc->current.mode)) {
+		if (crtc->mode_id != 0) {
+			drmModeDestroyPropertyBlob(crtc->dev->fd, crtc->mode_id);
+			crtc->mode_id = 0;
+		}
+
+		if (state->mode != NULL) {
+			if (drmModeCreatePropertyBlob(crtc->dev->fd, state->mode,
+					sizeof(drmModeModeInfo), &crtc->mode_id) != 0) {
+				fatal_errno("failed to create DRM property blob for mode");
+			}
+		}
+	}
+
 	drmModeAtomicAddProperty(req, crtc->id, crtc->props.mode_id, crtc->mode_id);
-	drmModeAtomicAddProperty(req, crtc->id, crtc->props.active,
-		crtc->mode_id != 0 && crtc->active);
+	drmModeAtomicAddProperty(req, crtc->id, crtc->props.active, state->active);
+
+	crtc->current.active = crtc->pending.active;
+	crtc_state_set_mode(&crtc->current, crtc->pending.mode);
 }
 
 void crtc_commit(struct crtc *crtc, uint32_t flags, void *user_data) {
 	struct device *dev = crtc->dev;
 	int cursor = drmModeAtomicGetCursor(dev->atomic_req);
 
-	crtc_update(crtc, dev->atomic_req);
+	crtc_push(crtc, dev->atomic_req);
 
 	for (size_t i = 0; i < dev->connectors_len; ++i) {
 		struct connector *conn = &dev->connectors[i];
-		if (conn->crtc == crtc) {
-			connector_update(conn, dev->atomic_req);
+		if (conn->current.crtc == crtc || conn->pending.crtc == crtc) {
+			connector_push(conn, dev->atomic_req);
 		}
 	}
 
 	for (size_t i = 0; i < dev->planes_len; ++i) {
 		struct plane *plane = &dev->planes[i];
-		if (plane->crtc == crtc) {
-			plane_update(plane, dev->atomic_req);
+		if (plane->current.crtc == crtc || plane->pending.crtc == crtc) {
+			plane_push(plane, dev->atomic_req);
 		}
 	}
 
@@ -393,8 +504,7 @@ void crtc_commit(struct crtc *crtc, uint32_t flags, void *user_data) {
 void crtc_set_mode(struct crtc *crtc, const drmModeModeInfo *mode) {
 	struct device *dev = crtc->dev;
 
-	if ((crtc->mode != NULL && memcmp(crtc->mode, mode, sizeof(*mode)) == 0) ||
-			(crtc->mode == NULL && mode == NULL)) {
+	if (compare_modes(crtc->pending.mode, mode)) {
 		return;
 	}
 
@@ -402,8 +512,8 @@ void crtc_set_mode(struct crtc *crtc, const drmModeModeInfo *mode) {
 		drmModeDestroyPropertyBlob(dev->fd, crtc->mode_id);
 		crtc->mode_id = 0;
 
-		free(crtc->mode);
-		crtc->mode = NULL;
+		free(crtc->pending.mode);
+		crtc->pending.mode = NULL;
 	}
 
 	if (mode == NULL) {
@@ -416,12 +526,14 @@ void crtc_set_mode(struct crtc *crtc, const drmModeModeInfo *mode) {
 		fatal_errno("failed to create DRM property blob for mode");
 	}
 
-	crtc->mode = xalloc(sizeof(*crtc->mode));
-	memcpy(crtc->mode, mode, sizeof(*crtc->mode));
+	crtc->pending.mode = xalloc(sizeof(drmModeModeInfo));
+	memcpy(crtc->pending.mode, mode, sizeof(drmModeModeInfo));
 
 	printf("assigning mode %"PRIu32"x%"PRIu32" to CRTC %"PRIu32"\n",
 		mode->hdisplay, mode->vdisplay, crtc->id);
 }
+
+static void plane_pull(struct plane *plane);
 
 static void plane_init(struct plane *plane, struct device *dev,
 		uint32_t plane_id) {
@@ -445,28 +557,26 @@ static void plane_init(struct plane *plane, struct device *dev,
 
 	drmModeFreePlane(drm_plane);
 
-	plane->alpha = 1.0;
+	plane->current.alpha = plane->pending.alpha = 1.0;
 
-	// TODO: read the properties
-	uint32_t crtc_id = 0;
-	struct prop plane_props[] = {
-		{ "CRTC_H", &plane->props.crtc_h, NULL, true },
-		{ "CRTC_ID", &plane->props.crtc_id, &crtc_id, true },
-		{ "CRTC_W", &plane->props.crtc_w, NULL, true },
-		{ "CRTC_X", &plane->props.crtc_x, NULL, true },
-		{ "CRTC_Y", &plane->props.crtc_y, NULL, true },
-		{ "FB_ID", &plane->props.fb_id, NULL, true },
-		{ "SRC_H", &plane->props.src_h, NULL, true },
-		{ "SRC_W", &plane->props.src_w, NULL, true },
-		{ "SRC_X", &plane->props.src_x, NULL, true },
-		{ "SRC_Y", &plane->props.src_y, NULL, true },
-		{ "alpha", &plane->props.alpha, NULL, false },
-		{ "type", &plane->props.type, &plane->type, true },
+	struct prop_init props[] = {
+		{ "CRTC_H", &plane->props.crtc_h, true },
+		{ "CRTC_ID", &plane->props.crtc_id, true },
+		{ "CRTC_W", &plane->props.crtc_w, true },
+		{ "CRTC_X", &plane->props.crtc_x, true },
+		{ "CRTC_Y", &plane->props.crtc_y, true },
+		{ "FB_ID", &plane->props.fb_id, true },
+		{ "SRC_H", &plane->props.src_h, true },
+		{ "SRC_W", &plane->props.src_w, true },
+		{ "SRC_X", &plane->props.src_x, true },
+		{ "SRC_Y", &plane->props.src_y, true },
+		{ "alpha", &plane->props.alpha, false },
+		{ "type", &plane->props.type, true },
 	};
-	read_obj_props(dev, plane_id, DRM_MODE_OBJECT_PLANE, plane_props,
-		sizeof(plane_props) / sizeof(plane_props[0]));
+	init_obj_props(plane->dev, plane->id, DRM_MODE_OBJECT_PLANE, props,
+		sizeof(props) / sizeof(props[0]));
 
-	plane->crtc = device_find_crtc(dev, crtc_id);
+	plane_pull(plane);
 
 	printf("plane %"PRIu32" has type %"PRIu32"\n", plane_id, plane->type);
 }
@@ -475,19 +585,67 @@ static void plane_finish(struct plane *plane) {
 	free(plane->linear_formats);
 }
 
+static void plane_pull(struct plane *plane) {
+	// TODO: pull other properties too
+	uint64_t type = 0, crtc_id = 0;
+	struct prop_pull props[] = {
+		{ plane->props.crtc_id, &crtc_id },
+		{ plane->props.type, &type },
+	};
+	pull_obj_props(plane->dev, plane->id, DRM_MODE_OBJECT_PLANE, props,
+		sizeof(props) / sizeof(props[0]));
+
+	// TODO: maybe move immutable properties to init?
+	plane->type = type;
+
+	plane->current.crtc = device_find_crtc(plane->dev, crtc_id);
+}
+
+static void plane_push(struct plane *plane, drmModeAtomicReq *req) {
+	struct plane_state *state = &plane->pending;
+
+	uint32_t crtc_id = 0;
+	uint32_t fb_id = 0;
+	if (state->crtc != NULL && state->fb != NULL) {
+		crtc_id = state->crtc->id;
+		fb_id = state->fb->id;
+	}
+	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_id, crtc_id);
+	drmModeAtomicAddProperty(req, plane->id, plane->props.fb_id, fb_id);
+
+	if (state->crtc != NULL && state->fb != NULL) {
+		drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_x, state->x);
+		drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_y, state->y);
+		drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_w, state->width);
+		drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_h, state->height);
+
+		// The src_* properties are in 16.16 fixed point
+		drmModeAtomicAddProperty(req, plane->id, plane->props.src_x, 0);
+		drmModeAtomicAddProperty(req, plane->id, plane->props.src_y, 0);
+		drmModeAtomicAddProperty(req, plane->id, plane->props.src_w, state->fb->width << 16);
+		drmModeAtomicAddProperty(req, plane->id, plane->props.src_h, state->fb->height << 16);
+
+		if (plane->props.alpha) {
+			drmModeAtomicAddProperty(req, plane->id, plane->props.alpha, state->alpha * 0xFFFF);
+		}
+	}
+
+	memcpy(&plane->current, &plane->pending, sizeof(struct plane_state));
+}
+
 void plane_set_framebuffer(struct plane *plane, struct framebuffer *fb) {
-	if (plane->fb == fb) {
+	if (plane->pending.fb == fb) {
 		return;
 	}
 
-	plane->fb = fb;
+	plane->pending.fb = fb;
 
 	printf("assigning framebuffer %"PRIu32" to plane %"PRIu32"\n",
 		fb->id, plane->id);
 }
 
 bool plane_set_crtc(struct plane *plane, struct crtc *crtc) {
-	if (plane->crtc == crtc) {
+	if (plane->pending.crtc == crtc) {
 		return true;
 	}
 
@@ -498,7 +656,7 @@ bool plane_set_crtc(struct plane *plane, struct crtc *crtc) {
 		}
 	}
 
-	plane->crtc = crtc;
+	plane->pending.crtc = crtc;
 
 	if (crtc == NULL) {
 		printf("assigning NULL CRTC to plane %"PRIu32"\n", plane->id);
@@ -508,34 +666,6 @@ bool plane_set_crtc(struct plane *plane, struct crtc *crtc) {
 	printf("assigning CRTC %"PRIu32" to plane %"PRIu32"\n",
 		crtc->id, plane->id);
 	return true;
-}
-
-static void plane_update(struct plane *plane, drmModeAtomicReq *req) {
-	uint32_t crtc_id = 0;
-	uint32_t fb_id = 0;
-	if (plane->crtc != NULL && plane->fb != NULL) {
-		crtc_id = plane->crtc->id;
-		fb_id = plane->fb->id;
-	}
-	drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_id, crtc_id);
-	drmModeAtomicAddProperty(req, plane->id, plane->props.fb_id, fb_id);
-
-	if (plane->crtc != NULL && plane->fb != NULL) {
-		drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_x, plane->x);
-		drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_y, plane->y);
-		drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_w, plane->width);
-		drmModeAtomicAddProperty(req, plane->id, plane->props.crtc_h, plane->height);
-
-		// The src_* properties are in 16.16 fixed point
-		drmModeAtomicAddProperty(req, plane->id, plane->props.src_x, 0);
-		drmModeAtomicAddProperty(req, plane->id, plane->props.src_y, 0);
-		drmModeAtomicAddProperty(req, plane->id, plane->props.src_w, plane->fb->width << 16);
-		drmModeAtomicAddProperty(req, plane->id, plane->props.src_h, plane->fb->height << 16);
-
-		if (plane->props.alpha) {
-			drmModeAtomicAddProperty(req, plane->id, plane->props.alpha, plane->alpha * 0xFFFF);
-		}
-	}
 }
 
 void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,

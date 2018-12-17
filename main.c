@@ -51,7 +51,7 @@ static void pick_mode(struct connector *conn) {
 			break;
 		}
 	}
-	crtc_set_mode(conn->crtc, mode);
+	crtc_set_mode(conn->pending.crtc, mode);
 }
 
 static uint32_t pick_rgb_format(struct plane *plane) {
@@ -94,18 +94,18 @@ static void handle_page_flip(int drm_fd, unsigned sequence, unsigned tv_sec,
 	int x = 0;
 	for (size_t j = 0; j < dev->planes_len; ++j) {
 		struct plane *plane = &dev->planes[j];
-		if (plane->crtc != conn->crtc) {
+		if (plane->pending.crtc != conn->pending.crtc) {
 			continue;
 		}
 
 		if (plane->type != DRM_PLANE_TYPE_PRIMARY) {
 			x += delta;
-			plane->x += x;
-			plane->y += delta;
+			plane->pending.x += x;
+			plane->pending.y += delta;
 		}
 	}
 
-	crtc_commit(conn->crtc,
+	crtc_commit(conn->pending.crtc,
 		DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_ATOMIC_NONBLOCK, conn);
 }
 
@@ -141,9 +141,10 @@ int main(int argc, char *argv[]) {
 	pick_mode(conn);
 
 	for (size_t i = 0; i < dev.crtcs_len; ++i) {
-		dev.crtcs[i].active = (conn->crtc == &dev.crtcs[i]);
+		dev.crtcs[i].pending.active = (conn->pending.crtc == &dev.crtcs[i]);
 	}
 
+	printf("setting modes on device\n");
 	device_commit(&dev, DRM_MODE_ATOMIC_ALLOW_MODESET);
 
 	struct dumb_framebuffer fbs[dev.planes_len + 1];
@@ -154,16 +155,17 @@ int main(int argc, char *argv[]) {
 
 		switch (plane->type) {
 		case DRM_PLANE_TYPE_OVERLAY:
-			plane->width = plane->height = 100;
+			plane->pending.width = plane->pending.height = 100;
 			break;
-		case DRM_PLANE_TYPE_PRIMARY:
-			plane->width = conn->crtc->mode->hdisplay;
-			plane->height = conn->crtc->mode->vdisplay;
+		case DRM_PLANE_TYPE_PRIMARY:;
+			const drmModeModeInfo *mode = conn->pending.crtc->pending.mode;
+			plane->pending.width = mode->hdisplay;
+			plane->pending.height = mode->vdisplay;
 			break;
 		case DRM_PLANE_TYPE_CURSOR:
 			// Some drivers *require* the FB to have exactly this size
-			plane->width = dev.caps.cursor_width;
-			plane->height = dev.caps.cursor_height;
+			plane->pending.width = dev.caps.cursor_width;
+			plane->pending.height = dev.caps.cursor_height;
 			break;
 		}
 
@@ -172,14 +174,14 @@ int main(int argc, char *argv[]) {
 			continue;
 		}
 
-		if (!plane_set_crtc(plane, conn->crtc)) {
+		if (!plane_set_crtc(plane, conn->pending.crtc)) {
 			plane_set_crtc(plane, NULL);
 			continue;
 		}
 
 		struct dumb_framebuffer *fb = &fbs[fbs_len];
 		dumb_framebuffer_init(fb, &dev, fb_fmt,
-			plane->width, plane->height);
+			plane->pending.width, plane->pending.height);
 		++fbs_len;
 
 		plane_set_framebuffer(plane, &fb->fb);
@@ -196,21 +198,22 @@ int main(int argc, char *argv[]) {
 	int x = 0;
 	for (size_t i = 0; i < dev.planes_len; ++i) {
 		struct plane *plane = &dev.planes[i];
-		if (plane->crtc != conn->crtc) {
+		if (plane->pending.crtc != conn->pending.crtc) {
 			continue;
 		}
 
-		struct dumb_framebuffer *fb = (struct dumb_framebuffer *)plane->fb;
+		struct dumb_framebuffer *fb =
+			(struct dumb_framebuffer *)plane->pending.fb;
 		if (!fb) {
 			continue;
 		}
 
 		if (plane->type != DRM_PLANE_TYPE_PRIMARY) {
 			x += 10;
-			plane->x = x;
-			plane->y = 2 * x;
+			plane->pending.x = x;
+			plane->pending.y = 2 * x;
 		}
-		plane->alpha = 0.5;
+		plane->pending.alpha = 0.5;
 
 		const uint8_t *color = colors[i % colors_len];
 		for (uint32_t y = 0; y < fb->fb.height; ++y) {
@@ -225,7 +228,8 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	crtc_commit(conn->crtc,
+	printf("starting rendering\n");
+	crtc_commit(conn->pending.crtc,
 		DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_ATOMIC_NONBLOCK, conn);
 
 	struct pollfd pollfd = {

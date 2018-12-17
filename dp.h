@@ -27,6 +27,14 @@ struct dumb_framebuffer {
 	uint8_t *data; // mmapped data we can write to
 };
 
+struct plane_state {
+	struct crtc *crtc; // can be NULL
+	struct framebuffer *fb; // can be NULL
+	uint32_t x, y;
+	uint32_t width, height;
+	float alpha;
+};
+
 struct plane {
 	struct device *dev;
 	uint32_t id;
@@ -36,11 +44,7 @@ struct plane {
 	uint32_t *linear_formats;
 	size_t linear_formats_len;
 
-	struct crtc *crtc; // can be NULL
-	struct framebuffer *fb; // can be NULL
-	uint32_t x, y;
-	uint32_t width, height;
-	float alpha;
+	struct plane_state current, pending;
 
 	struct {
 		uint32_t alpha;
@@ -58,18 +62,26 @@ struct plane {
 	} props;
 };
 
+struct crtc_state {
+	drmModeModeInfo *mode;
+	bool active;
+};
+
 struct crtc {
 	struct device *dev;
 	uint32_t id;
 
-	drmModeModeInfo *mode;
+	struct crtc_state current, pending;
 	uint32_t mode_id;
-	bool active;
 
 	struct {
 		uint32_t active;
 		uint32_t mode_id;
 	} props;
+};
+
+struct connector_state {
+	struct crtc *crtc; // can be NULL
 };
 
 struct connector {
@@ -81,7 +93,7 @@ struct connector {
 	drmModeModeInfo *modes;
 	size_t modes_len;
 
-	struct crtc *crtc; // can be NULL
+	struct connector_state current, pending;
 
 	struct {
 		uint32_t crtc_id;
