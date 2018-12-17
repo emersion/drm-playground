@@ -124,9 +124,17 @@ int main(int argc, char *argv[]) {
 	if (dev.crtcs_len == 0) {
 		fatal("no CRTC");
 	}
-	struct connector *conn = &dev.connectors[0];
-	if (conn->state != DRM_MODE_CONNECTED) {
-		fatal("connector %"PRIu32" not connected", conn->id);
+
+	struct connector *conn = NULL;
+	for (size_t i = 0; i < dev.connectors_len; ++i) {
+		if (dev.connectors[i].state == DRM_MODE_CONNECTED && conn == NULL) {
+			conn = &dev.connectors[i];
+		} else {
+			connector_set_crtc(&dev.connectors[i], NULL);
+		}
+	}
+	if (conn == NULL) {
+		fatal("failed to find a connected connector");
 	}
 
 	pick_crtc(conn);
