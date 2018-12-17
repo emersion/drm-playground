@@ -115,6 +115,7 @@ void device_commit(struct device *dev, uint32_t flags);
 
 bool connector_set_crtc(struct connector *conn, struct crtc *crtc);
 
+void crtc_commit(struct crtc *crtc, uint32_t flags, void *user_data);
 void crtc_set_mode(struct crtc *crtc, const drmModeModeInfo *mode);
 
 void plane_set_framebuffer(struct plane *plane, struct framebuffer *fb);

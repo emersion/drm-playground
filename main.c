@@ -1,13 +1,17 @@
 #include <inttypes.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <time.h>
 
 #include <drm_fourcc.h>
+#include <xf86drm.h>
 
 #include "dp.h"
 #include "util.h"
 
 #include <stdio.h>
+
+static bool running = true;
 
 // Pick the CRTC with the maximum number of planes
 static void pick_crtc(struct connector *conn) {
@@ -68,6 +72,43 @@ static uint32_t pick_rgb_format(struct plane *plane) {
 	return fb_fmt;
 }
 
+static int n_page_flips = 0;
+static bool to_right = true;
+
+static void handle_page_flip(int drm_fd, unsigned sequence, unsigned tv_sec,
+		unsigned tv_usec, void *data) {
+	struct connector *conn = data;
+	struct device *dev = conn->dev;
+
+	++n_page_flips;
+	if (n_page_flips > 60 * 5) {
+		running = false;
+		return;
+	}
+
+	if (n_page_flips % 60 == 0) {
+		to_right = !to_right;
+	}
+
+	int delta = to_right ? 1 : -1;
+	int x = 0;
+	for (size_t j = 0; j < dev->planes_len; ++j) {
+		struct plane *plane = &dev->planes[j];
+		if (plane->crtc != conn->crtc) {
+			continue;
+		}
+
+		if (plane->type != DRM_PLANE_TYPE_PRIMARY) {
+			x += delta;
+			plane->x += x;
+			plane->y += delta;
+		}
+	}
+
+	crtc_commit(conn->crtc,
+		DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_ATOMIC_NONBLOCK, conn);
+}
+
 int main(int argc, char *argv[]) {
 	const char *device_path = "/dev/dri/card0";
 	if (argc == 2) {
@@ -91,8 +132,7 @@ int main(int argc, char *argv[]) {
 	pick_crtc(conn);
 	pick_mode(conn);
 
-	device_commit(&dev,
-		DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK);
+	device_commit(&dev, DRM_MODE_ATOMIC_ALLOW_MODESET);
 
 	struct dumb_framebuffer fbs[dev.planes_len + 1];
 	size_t fbs_len = 0;
@@ -172,31 +212,30 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	bool to_right = false;
-	for (int i = 0; i < 60 * 5; ++i) {
-		device_commit(&dev, DRM_MODE_ATOMIC_NONBLOCK);
+	crtc_commit(conn->crtc,
+		DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_ATOMIC_NONBLOCK, conn);
 
-		if (i % 60 == 0) {
-			to_right = !to_right;
+	struct pollfd pollfd = {
+		.fd = dev.fd,
+		.events = POLLIN,
+	};
+
+	while (running) {
+		int ret = poll(&pollfd, 1, -1);
+		if (ret < 0 && errno != EAGAIN) {
+			fatal("poll failed");
 		}
 
-		int delta = to_right ? 1 : -1;
-		int x = 0;
-		for (size_t j = 0; j < dev.planes_len; ++j) {
-			struct plane *plane = &dev.planes[j];
-			if (plane->crtc != conn->crtc) {
-				continue;
-			}
+		if (pollfd.revents & POLLIN) {
+			drmEventContext context = {
+				.version = 2,
+				.page_flip_handler = handle_page_flip,
+			};
 
-			if (plane->type != DRM_PLANE_TYPE_PRIMARY) {
-				x += delta;
-				plane->x += x;
-				plane->y += delta;
+			if (drmHandleEvent(dev.fd, &context) < 0) {
+				fatal_errno("drmHandleEvent failed");
 			}
 		}
-
-		struct timespec ts = { .tv_nsec = 16666667 }; // 60 FPS
-		nanosleep(&ts, NULL);
 	}
 
 	for (size_t i = 0; i < fbs_len; ++i) {

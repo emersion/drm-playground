@@ -363,6 +363,33 @@ static void crtc_update(struct crtc *crtc, drmModeAtomicReq *req) {
 		crtc->mode_id != 0 && crtc->active);
 }
 
+void crtc_commit(struct crtc *crtc, uint32_t flags, void *user_data) {
+	struct device *dev = crtc->dev;
+	int cursor = drmModeAtomicGetCursor(dev->atomic_req);
+
+	crtc_update(crtc, dev->atomic_req);
+
+	for (size_t i = 0; i < dev->connectors_len; ++i) {
+		struct connector *conn = &dev->connectors[i];
+		if (conn->crtc == crtc) {
+			connector_update(conn, dev->atomic_req);
+		}
+	}
+
+	for (size_t i = 0; i < dev->planes_len; ++i) {
+		struct plane *plane = &dev->planes[i];
+		if (plane->crtc == crtc) {
+			plane_update(plane, dev->atomic_req);
+		}
+	}
+
+	if (drmModeAtomicCommit(dev->fd, dev->atomic_req, flags, user_data)) {
+		fatal_errno("drmModeAtomicCommit failed");
+	}
+
+	drmModeAtomicSetCursor(dev->atomic_req, cursor);
+}
+
 void crtc_set_mode(struct crtc *crtc, const drmModeModeInfo *mode) {
 	struct device *dev = crtc->dev;
 
