@@ -17,7 +17,7 @@ struct framebuffer {
 	uint32_t width, height;
 };
 
-struct dumb_framebuffer {
+struct framebuffer_dumb {
 	struct framebuffer fb;
 
 	uint32_t stride;
@@ -121,8 +121,8 @@ void crtc_set_mode(struct crtc *crtc, const drmModeModeInfo *mode);
 void plane_set_framebuffer(struct plane *plane, struct framebuffer *fb);
 bool plane_set_crtc(struct plane *plane, struct crtc *crtc);
 
-void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,
+void framebuffer_dumb_init(struct framebuffer_dumb *fb, struct device *dev,
 	uint32_t fmt, uint32_t width, uint32_t height);
-void dumb_framebuffer_finish(struct dumb_framebuffer *fb);
+void framebuffer_dumb_finish(struct framebuffer_dumb *fb);
 
 #endif

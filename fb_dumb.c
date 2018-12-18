@@ -11,7 +11,7 @@
 #include "dp.h"
 #include "util.h"
 
-void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,
+void framebuffer_dumb_init(struct framebuffer_dumb *fb, struct device *dev,
 		uint32_t fmt, uint32_t width, uint32_t height) {
 	int ret;
 
@@ -74,7 +74,7 @@ void dumb_framebuffer_init(struct dumb_framebuffer *fb, struct device *dev,
 	printf("dumb framebuffer %"PRIu32" initialized\n", fb->fb.id);
 }
 
-void dumb_framebuffer_finish(struct dumb_framebuffer *fb) {
+void framebuffer_dumb_finish(struct framebuffer_dumb *fb) {
 	munmap(fb->data, fb->size);
 	fb->data = NULL;
 

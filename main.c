@@ -146,7 +146,7 @@ int main(int argc, char *argv[]) {
 
 	device_commit(&dev, DRM_MODE_ATOMIC_ALLOW_MODESET);
 
-	struct dumb_framebuffer fbs[dev.planes_len + 1];
+	struct framebuffer_dumb fbs[dev.planes_len + 1];
 	size_t fbs_len = 0;
 
 	for (size_t i = 0; i < dev.planes_len; ++i) {
@@ -177,8 +177,8 @@ int main(int argc, char *argv[]) {
 			continue;
 		}
 
-		struct dumb_framebuffer *fb = &fbs[fbs_len];
-		dumb_framebuffer_init(fb, &dev, fb_fmt,
+		struct framebuffer_dumb *fb = &fbs[fbs_len];
+		framebuffer_dumb_init(fb, &dev, fb_fmt,
 			plane->width, plane->height);
 		++fbs_len;
 
@@ -200,7 +200,7 @@ int main(int argc, char *argv[]) {
 			continue;
 		}
 
-		struct dumb_framebuffer *fb = (struct dumb_framebuffer *)plane->fb;
+		struct framebuffer_dumb *fb = (struct framebuffer_dumb *)plane->fb;
 		if (!fb) {
 			continue;
 		}
@@ -252,7 +252,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	for (size_t i = 0; i < fbs_len; ++i) {
-		dumb_framebuffer_finish(&fbs[i]);
+		framebuffer_dumb_finish(&fbs[i]);
 	}
 
 	device_finish(&dev);
