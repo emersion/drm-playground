@@ -228,10 +228,7 @@ int main(int argc, char *argv[]) {
 	crtc_commit(conn->crtc,
 		DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_ATOMIC_NONBLOCK, conn);
 
-	struct pollfd pollfd = {
-		.fd = dev.fd,
-		.events = POLLIN,
-	};
+	struct pollfd pollfd = { .fd = dev.fd, .events = POLLIN };
 
 	while (running) {
 		int ret = poll(&pollfd, 1, timeout_sec * 1000);

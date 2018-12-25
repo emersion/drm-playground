@@ -25,6 +25,7 @@ void connector_init(struct connector *conn, struct device *dev,
 		fatal_errno("failed to get connector %"PRIu32, conn_id);
 	}
 
+	conn->type = drm_conn->connector_type;
 	conn->state = drm_conn->connection;
 
 	if (drm_conn->count_modes > 0) {

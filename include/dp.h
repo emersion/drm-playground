@@ -75,8 +75,9 @@ struct crtc {
 struct connector {
 	struct device *dev;
 	uint32_t id;
-	drmModeConnection state;
+	uint32_t type;
 	uint32_t possible_crtcs;
+	drmModeConnection state;
 
 	drmModeModeInfo *modes;
 	size_t modes_len;
