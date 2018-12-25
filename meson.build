@@ -11,8 +11,14 @@ project('drm_playground', 'c',
 add_project_arguments('-Wno-unused-parameter', language: 'c')
 add_project_arguments('-D_POSIX_C_SOURCE=200809L', language: 'c')
 
-executable(
-	'drm_playground',
+dp_inc = include_directories('include')
+
+dp_deps = [
+	dependency('libdrm'),
+]
+
+dp_lib = static_library(
+	'dp',
 	files([
 		'drm_connector.c',
 		'drm_crtc.c',
@@ -20,11 +26,21 @@ executable(
 		'drm_plane.c',
 		'drm_prop.c',
 		'fb_dumb.c',
-		'main.c',
 		'util.c',
 	]),
-	dependencies: [
-		dependency('libdrm'),
-	],
+	dependencies: dp_deps,
+	include_directories: dp_inc,
+)
+
+dp = declare_dependency(
+	link_with: dp_lib,
+	dependencies: dp_deps,
+	include_directories: dp_inc,
+)
+
+executable(
+	'planes',
+	files('planes.c'),
+	dependencies: [dp],
 	install: true,
 )
