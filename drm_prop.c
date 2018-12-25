@@ -1,7 +1,8 @@
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "drm.h"
+#include "dp_drm.h"
 #include "util.h"
 
 static int prop_cmp(const void *arg1, const void *arg2) {

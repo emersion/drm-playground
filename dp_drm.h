@@ -1,6 +1,8 @@
 #ifndef DP_DRM_H
 #define DP_DRM_H
 
+#include <xf86drmMode.h>
+
 #include "dp.h"
 
 struct encoder {

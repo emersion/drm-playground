@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "drm.h"
+#include "dp_drm.h"
 #include "util.h"
 
 void plane_init(struct plane *plane, struct device *dev, uint32_t plane_id) {

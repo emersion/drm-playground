@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "drm.h"
+#include "dp_drm.h"
 #include "util.h"
 
 void crtc_init(struct crtc *crtc, struct device *dev, uint32_t crtc_id) {

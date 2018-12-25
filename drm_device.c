@@ -5,7 +5,7 @@
 
 #include <xf86drm.h>
 
-#include "drm.h"
+#include "dp_drm.h"
 #include "util.h"
 
 void device_init(struct device *dev, const char *path) {

@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "drm.h"
+#include "dp_drm.h"
 #include "util.h"
 
 void connector_init(struct connector *conn, struct device *dev,

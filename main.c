@@ -72,6 +72,7 @@ static uint32_t pick_rgb_format(struct plane *plane) {
 	return fb_fmt;
 }
 
+static const int timeout_sec = 5;
 static int n_page_flips = 0;
 static bool to_right = true;
 
@@ -81,7 +82,7 @@ static void handle_page_flip(int drm_fd, unsigned sequence, unsigned tv_sec,
 	struct device *dev = conn->dev;
 
 	++n_page_flips;
-	if (n_page_flips > 60 * 5) {
+	if (n_page_flips > 60 * timeout_sec) {
 		running = false;
 		return;
 	}
@@ -178,8 +179,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		struct framebuffer_dumb *fb = &fbs[fbs_len];
-		framebuffer_dumb_init(fb, &dev, fb_fmt,
-			plane->width, plane->height);
+		framebuffer_dumb_init(fb, &dev, fb_fmt, plane->width, plane->height);
 		++fbs_len;
 
 		plane_set_framebuffer(plane, &fb->fb);
@@ -214,7 +214,7 @@ int main(int argc, char *argv[]) {
 
 		const uint8_t *color = colors[i % colors_len];
 		for (uint32_t y = 0; y < fb->fb.height; ++y) {
-			uint8_t *row = fb->data + fb->stride * y;
+			uint8_t *row = (uint8_t *)fb->data + fb->stride * y;
 
 			for (uint32_t x = 0; x < fb->fb.width; ++x) {
 				row[x * 4 + 0] = color[0];
@@ -234,7 +234,7 @@ int main(int argc, char *argv[]) {
 	};
 
 	while (running) {
-		int ret = poll(&pollfd, 1, -1);
+		int ret = poll(&pollfd, 1, timeout_sec * 1000);
 		if (ret < 0 && errno != EAGAIN) {
 			fatal("poll failed");
 		}
