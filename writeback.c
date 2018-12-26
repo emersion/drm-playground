@@ -86,19 +86,19 @@ static void write_xrgb_frame(struct framebuffer_dumb *fb,
 
 	png_init_io(png, f);
 
-	png_set_IHDR(png, info, fb->fb.width, fb->fb.height, 8, PNG_COLOR_TYPE_RGBA,
+	png_set_IHDR(png, info, fb->fb.width, fb->fb.height, 8, PNG_COLOR_TYPE_RGB,
 		PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
 		PNG_FILTER_TYPE_DEFAULT);
-
 	png_set_bgr(png);
-
 	png_write_info(png, info);
+
+	png_set_filler(png, 0, PNG_FILLER_AFTER);
 
 	void *data = NULL;
 	framebuffer_dumb_map(fb, PROT_READ, &data);
 
 	for (size_t i = 0; i < fb->fb.height; ++i) {
-		png_bytep row = (uint8_t *)data + i * fb->stride;
+		const png_bytep row = (uint8_t *)data + i * fb->stride;
 		png_write_row(png, row);
 	}
 
@@ -236,9 +236,20 @@ int main(int argc, char *argv[]) {
 		framebuffer_dumb_unmap(fb, data);
 	}
 
+	uint32_t writeback_fmt = DRM_FORMAT_XRGB8888;
+	bool found = false;
+	for (size_t i = 0; i < conn->writeback_formats_len; ++i) {
+		if (conn->writeback_formats[i] == writeback_fmt) {
+			found = true;
+			break;
+		}
+	}
+	if (!found) {
+		fatal("writeback connector doesn't support DRM_FORMAT_XRGB8888");
+	}
+
 	struct framebuffer_dumb writeback_fb = {0};
-	// TODO: pick format from writeback formats
-	framebuffer_dumb_init(&writeback_fb, &dev, DRM_FORMAT_XRGB8888,
+	framebuffer_dumb_init(&writeback_fb, &dev, writeback_fmt,
 		conn->crtc->mode->hdisplay, conn->crtc->mode->vdisplay);
 
 	int out_fence = -1;
