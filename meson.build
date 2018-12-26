@@ -50,5 +50,5 @@ executable(
 executable(
 	'writeback',
 	files('writeback.c'),
-	dependencies: [dp],
+	dependencies: [dp, dependency('libpng')],
 )

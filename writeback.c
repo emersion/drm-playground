@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <drm_fourcc.h>
+#include <png.h>
 #include <xf86drm.h>
 
 #include "dp.h"
@@ -69,6 +70,39 @@ static uint32_t pick_rgb_format(struct plane *plane) {
 	}
 
 	return fb_fmt;
+}
+
+static void write_xrgb_frame(struct framebuffer_dumb *fb,
+		const char *filename) {
+	FILE *f = fopen(filename, "wb");
+	if (f == NULL) {
+		fatal("fopen failed");
+	}
+
+	png_structp png =
+		png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+	png_infop info = png_create_info_struct(png);
+
+	png_init_io(png, f);
+
+	png_set_IHDR(png, info, fb->fb.width, fb->fb.height, 8, PNG_COLOR_TYPE_RGBA,
+		PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
+		PNG_FILTER_TYPE_DEFAULT);
+
+	png_set_bgr(png);
+
+	png_write_info(png, info);
+
+	for (size_t i = 0; i < fb->fb.height; ++i) {
+		png_bytep row = fb->data + i * fb->stride;
+		png_write_row(png, row);
+	}
+
+	png_write_end(png, NULL);
+
+	png_destroy_write_struct(&png, &info);
+
+	fclose(f);
 }
 
 int main(int argc, char *argv[]) {
@@ -210,12 +244,14 @@ int main(int argc, char *argv[]) {
 		}
 
 		if (pollfd.revents & POLLIN) {
-			// TODO: write to file
 			break;
 		}
 	}
 
 	close(out_fence);
+
+	write_xrgb_frame(&writeback_fb, "writeback.png");
+
 	framebuffer_dumb_finish(&writeback_fb);
 
 	for (size_t i = 0; i < fbs_len; ++i) {
