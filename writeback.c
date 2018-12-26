@@ -237,15 +237,13 @@ int main(int argc, char *argv[]) {
 
 	struct pollfd pollfd = { .fd = out_fence, .events = POLLIN };
 
-	while (true) {
-		int ret = poll(&pollfd, 1, -1);
-		if (ret < 0 && errno != EAGAIN) {
-			fatal("poll failed");
-		}
-
-		if (pollfd.revents & POLLIN) {
-			break;
-		}
+	int ret = poll(&pollfd, 1, 1000);
+	if (ret < 0) {
+		fatal_errno("poll failed");
+	} else if (ret == 0) {
+		fatal("poll timed out");
+	} else if (pollfd.revents & (POLLERR | POLLNVAL)) {
+		fatal("poll revents error");
 	}
 
 	close(out_fence);
