@@ -13,9 +13,12 @@ void connector_init(struct connector *conn, struct device *dev,
 	conn->dev = dev;
 	conn->id = conn_id;
 
-	uint32_t crtc_id = 0;
+	uint32_t crtc_id = 0, writeback_fmts_id = 0;
 	struct prop conn_props[] = {
 		{ "CRTC_ID", &conn->props.crtc_id, &crtc_id, true },
+		{ "WRITEBACK_FB_ID", &conn->props.writeback_fb_id, NULL, false },
+		{ "WRITEBACK_OUT_FENCE_PTR", &conn->props.writeback_out_fence_ptr, NULL, false },
+		{ "WRITEBACK_PIXEL_FORMATS", &conn->props.writeback_pixel_formats, &writeback_fmts_id, false },
 	};
 	read_obj_props(dev, conn_id, DRM_MODE_OBJECT_CONNECTOR, conn_props,
 		sizeof(conn_props) / sizeof(conn_props[0]));
@@ -58,6 +61,20 @@ void connector_init(struct connector *conn, struct device *dev,
 
 	conn->old_crtc = drmModeGetCrtc(dev->fd, crtc_id);
 	conn->crtc = device_find_crtc(dev, crtc_id);
+
+	if (writeback_fmts_id != 0) {
+		drmModePropertyBlobRes *blob =
+			drmModeGetPropertyBlob(dev->fd, writeback_fmts_id);
+		if (blob == NULL) {
+			fatal_errno("failed to get WRITEBACK_PIXEL_FORMATS blob");
+		}
+		uint32_t *fmts = blob->data;
+		conn->writeback_formats_len = blob->length / sizeof(uint32_t);
+		free(conn->writeback_formats);
+		conn->writeback_formats = xalloc(blob->length);
+		memcpy(conn->writeback_formats, fmts, blob->length);
+		drmModeFreePropertyBlob(blob);
+	}
 }
 
 void connector_finish(struct connector *conn) {
@@ -71,6 +88,24 @@ void connector_finish(struct connector *conn) {
 	}
 
 	free(conn->modes);
+	free(conn->writeback_formats);
+}
+
+void connector_update(struct connector *conn, drmModeAtomicReq *req) {
+	uint32_t crtc_id = (conn->crtc != NULL) ? conn->crtc->id : 0;
+	drmModeAtomicAddProperty(req, conn->id, conn->props.crtc_id, crtc_id);
+
+	uint32_t writeback_fb_id =
+		(conn->writeback_fb != NULL) ? conn->writeback_fb->id : 0;
+	drmModeAtomicAddProperty(req, conn->id, conn->props.writeback_fb_id,
+		writeback_fb_id);
+	conn->writeback_fb = NULL;
+	uint64_t writeback_out_fence_ptr =
+		(conn->writeback_out_fence_ptr != NULL) ?
+		(uint64_t)conn->writeback_out_fence_ptr : 0;
+	drmModeAtomicAddProperty(req, conn->id, conn->props.writeback_out_fence_ptr,
+		writeback_out_fence_ptr);
+	conn->writeback_out_fence_ptr = NULL;
 }
 
 bool connector_set_crtc(struct connector *conn, struct crtc *crtc) {
@@ -91,7 +126,8 @@ bool connector_set_crtc(struct connector *conn, struct crtc *crtc) {
 	return true;
 }
 
-void connector_update(struct connector *conn, drmModeAtomicReq *req) {
-	uint32_t crtc_id = (conn->crtc != NULL) ? conn->crtc->id : 0;
-	drmModeAtomicAddProperty(req, conn->id, conn->props.crtc_id, crtc_id);
+void connector_set_writeback(struct connector *conn, struct framebuffer *fb,
+		int *out_fence_ptr) {
+	conn->writeback_fb = fb;
+	conn->writeback_out_fence_ptr = out_fence_ptr;
 }

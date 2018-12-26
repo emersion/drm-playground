@@ -23,6 +23,10 @@ void device_init(struct device *dev, const char *path) {
 		fatal("DRM device must support universal planes");
 	}
 
+	if (drmSetClientCap(dev->fd, DRM_CLIENT_CAP_WRITEBACK_CONNECTORS, 1) != 0) {
+		fatal("DRM device must support writeback connnectors");
+	}
+
 	uint64_t has_dumb;
 	if (drmGetCap(dev->fd, DRM_CAP_DUMB_BUFFER, &has_dumb) != 0) {
 		fatal("drmGetCap(DRM_CAP_DUMB_BUFFER) failed");

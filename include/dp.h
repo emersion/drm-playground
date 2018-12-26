@@ -80,10 +80,18 @@ struct connector {
 	drmModeModeInfo *modes;
 	size_t modes_len;
 
+	uint32_t *writeback_formats;
+	size_t writeback_formats_len;
+
 	struct crtc *crtc; // can be NULL
+	struct framebuffer *writeback_fb; // can be NULL
+	int *writeback_out_fence_ptr; // can be NULL
 
 	struct {
 		uint32_t crtc_id;
+		uint32_t writeback_fb_id;
+		uint32_t writeback_out_fence_ptr;
+		uint32_t writeback_pixel_formats;
 	} props;
 
 	drmModeCrtc *old_crtc;
@@ -113,6 +121,8 @@ void device_finish(struct device *dev);
 void device_commit(struct device *dev, uint32_t flags);
 
 bool connector_set_crtc(struct connector *conn, struct crtc *crtc);
+void connector_set_writeback(struct connector *conn, struct framebuffer *fb,
+	int *out_fence_ptr);
 
 void crtc_commit(struct crtc *crtc, uint32_t flags, void *user_data);
 void crtc_set_mode(struct crtc *crtc, const drmModeModeInfo *mode);

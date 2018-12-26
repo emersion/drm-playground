@@ -8,8 +8,11 @@ project('drm_playground', 'c',
 	],
 )
 
-add_project_arguments('-Wno-unused-parameter', language: 'c')
-add_project_arguments('-D_POSIX_C_SOURCE=200809L', language: 'c')
+add_project_arguments([
+	'-Wno-unused-parameter',
+	'-Wno-missing-braces',
+	'-D_POSIX_C_SOURCE=200809L',
+], language: 'c')
 
 dp_inc = include_directories('include')
 
@@ -42,5 +45,10 @@ executable(
 	'planes',
 	files('planes.c'),
 	dependencies: [dp],
-	install: true,
+)
+
+executable(
+	'writeback',
+	files('writeback.c'),
+	dependencies: [dp],
 )
