@@ -1,6 +1,7 @@
 #include <inttypes.h>
 #include <poll.h>
 #include <stdlib.h>
+#include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -93,10 +94,15 @@ static void write_xrgb_frame(struct framebuffer_dumb *fb,
 
 	png_write_info(png, info);
 
+	void *data = NULL;
+	framebuffer_dumb_map(fb, PROT_READ, &data);
+
 	for (size_t i = 0; i < fb->fb.height; ++i) {
-		png_bytep row = fb->data + i * fb->stride;
+		png_bytep row = (uint8_t *)data + i * fb->stride;
 		png_write_row(png, row);
 	}
+
+	framebuffer_dumb_unmap(fb, data);
 
 	png_write_end(png, NULL);
 
@@ -212,9 +218,12 @@ int main(int argc, char *argv[]) {
 		}
 		plane->alpha = 0.5;
 
+		void *data = NULL;
+		framebuffer_dumb_map(fb, PROT_WRITE, &data);
+
 		const uint8_t *color = colors[i % colors_len];
 		for (uint32_t y = 0; y < fb->fb.height; ++y) {
-			uint8_t *row = (uint8_t *)fb->data + fb->stride * y;
+			uint8_t *row = (uint8_t *)data + fb->stride * y;
 
 			for (uint32_t x = 0; x < fb->fb.width; ++x) {
 				row[x * 4 + 0] = color[0];
@@ -223,6 +232,8 @@ int main(int argc, char *argv[]) {
 				row[x * 4 + 3] = 0x80;
 			}
 		}
+
+		framebuffer_dumb_unmap(fb, data);
 	}
 
 	struct framebuffer_dumb writeback_fb = {0};
