@@ -23,8 +23,6 @@ struct framebuffer_dumb {
 	uint32_t stride;
 	uint32_t handle; // driver-specific handle
 	uint64_t size; // size of mapping
-
-	uint8_t *data; // mmapped data we can write to
 };
 
 struct plane {
@@ -125,5 +123,8 @@ bool plane_set_crtc(struct plane *plane, struct crtc *crtc);
 void framebuffer_dumb_init(struct framebuffer_dumb *fb, struct device *dev,
 	uint32_t fmt, uint32_t width, uint32_t height);
 void framebuffer_dumb_finish(struct framebuffer_dumb *fb);
+void framebuffer_dumb_map(struct framebuffer_dumb *fb, uint32_t flags,
+	void **data_ptr);
+void framebuffer_dumb_unmap(struct framebuffer_dumb *fb, void *data);
 
 #endif

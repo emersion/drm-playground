@@ -57,30 +57,39 @@ void framebuffer_dumb_init(struct framebuffer_dumb *fb, struct device *dev,
 		fatal("drmModeAddFB2 failed");
 	}
 
-	struct drm_mode_map_dumb map = { .handle = fb->handle };
-	ret = drmIoctl(dev->fd, DRM_IOCTL_MODE_MAP_DUMB, &map);
-	if (ret < 0) {
-		fatal("DRM_IOCTL_MODE_MAP_DUMB failed");
-	}
-
-	fb->data = mmap(0, fb->size, PROT_READ | PROT_WRITE, MAP_SHARED,
-		dev->fd, map.offset);
-	if (!fb->data) {
-		fatal("mmap failed");
-	}
-
-	memset(fb->data, 0xFF, fb->size);
+	void *data = NULL;
+	framebuffer_dumb_map(fb, PROT_WRITE, &data);
+	memset(data, 0xFF, fb->size);
+	framebuffer_dumb_unmap(fb, data);
 
 	printf("dumb framebuffer %"PRIu32" initialized\n", fb->fb.id);
 }
 
 void framebuffer_dumb_finish(struct framebuffer_dumb *fb) {
-	munmap(fb->data, fb->size);
-	fb->data = NULL;
-
 	drmModeRmFB(fb->fb.dev->fd, fb->fb.id);
 	fb->fb.id = 0;
 
 	struct drm_mode_destroy_dumb destroy = { .handle = fb->handle };
 	drmIoctl(fb->fb.dev->fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+}
+
+void framebuffer_dumb_map(struct framebuffer_dumb *fb, uint32_t flags,
+		void **data_ptr) {
+	struct drm_mode_map_dumb map = { .handle = fb->handle };
+	int ret = drmIoctl(fb->fb.dev->fd, DRM_IOCTL_MODE_MAP_DUMB, &map);
+	if (ret < 0) {
+		fatal("DRM_IOCTL_MODE_MAP_DUMB failed");
+	}
+
+	void *data = mmap(0, fb->size, PROT_READ | PROT_WRITE, MAP_SHARED,
+		fb->fb.dev->fd, map.offset);
+	if (!data) {
+		fatal("mmap failed");
+	}
+
+	*data_ptr = data;
+}
+
+void framebuffer_dumb_unmap(struct framebuffer_dumb *fb, void *data) {
+	munmap(data, fb->size);
 }
