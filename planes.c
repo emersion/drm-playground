@@ -142,7 +142,11 @@ int main(int argc, char *argv[]) {
 	pick_mode(conn);
 
 	for (size_t i = 0; i < dev.crtcs_len; ++i) {
-		dev.crtcs[i].active = (conn->crtc == &dev.crtcs[i]);
+		struct crtc *crtc = &dev.crtcs[i];
+		crtc->active = (conn->crtc == crtc);
+		if (!crtc->active) {
+			crtc_set_mode(crtc, NULL);
+		}
 	}
 
 	device_commit(&dev, DRM_MODE_ATOMIC_ALLOW_MODESET);

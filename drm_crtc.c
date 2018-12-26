@@ -76,11 +76,20 @@ void crtc_commit(struct crtc *crtc, uint32_t flags, void *user_data) {
 	drmModeAtomicSetCursor(dev->atomic_req, cursor);
 }
 
+static bool compare_modes(const drmModeModeInfo *a, const drmModeModeInfo *b) {
+	if (a == NULL && b == NULL) {
+		return true;
+	}
+	if (a == NULL || b == NULL) {
+		return false;
+	}
+	return memcmp(a, b, sizeof(drmModeModeInfo)) == 0;
+}
+
 void crtc_set_mode(struct crtc *crtc, const drmModeModeInfo *mode) {
 	struct device *dev = crtc->dev;
 
-	if ((crtc->mode != NULL && memcmp(crtc->mode, mode, sizeof(*mode)) == 0) ||
-			(crtc->mode == NULL && mode == NULL)) {
+	if (compare_modes(crtc->mode, mode)) {
 		return;
 	}
 
