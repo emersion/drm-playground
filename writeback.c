@@ -233,7 +233,7 @@ int main(int argc, char *argv[]) {
 	int out_fence = -1;
 	connector_set_writeback(conn, &writeback_fb.fb, &out_fence);
 
-	crtc_commit(conn->crtc, DRM_MODE_ATOMIC_NONBLOCK, conn);
+	crtc_commit(conn->crtc, 0, conn);
 
 	struct pollfd pollfd = { .fd = out_fence, .events = POLLIN };
 
